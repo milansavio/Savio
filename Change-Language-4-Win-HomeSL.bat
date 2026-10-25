@@ -264,6 +264,7 @@ if /i not "%UUPCHOICE%"=="Y" (
 )
 call :FALLBACK_UUPDUMP
 if %errorlevel% == 0 exit /b 0
+if %errorlevel% == 2 exit /b 2
 echo [LOI] Tai tu UUPDump that bai. Khong cai dat duoc goi ngon ngu %LANG_CODE%.
 exit /b 1
 
@@ -276,6 +277,13 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\Install-UUPDumpLanguage.ps1" -Language %LANG_CODE%
+if %errorlevel% == 2 (
+    echo.
+    echo [UUPDump] File ESD da duoc tai ve, tool giu nguyen file de ban convert sang CAB roi cai tay.
+    echo Tool se khong doi ngon ngu hien thi khi goi chua co.
+    del "%TEMP%\Install-UUPDumpLanguage.ps1" >nul 2>&1
+    exit /b 2
+)
 if %errorlevel% neq 0 (
     echo [LOI] Script UUPDump chay khong thanh cong. File tam nam tai: %TEMP%\Install-UUPDumpLanguage.ps1
     exit /b 1
