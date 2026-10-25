@@ -1,4 +1,6 @@
 @echo off
+:: Giao dien cmd: nen trang, chu den
+color F0
 title Tools Thay Doi Ngon Ngu Windows - Windows Home Single Language by Savio
 cls
 
@@ -35,14 +37,14 @@ echo      TIEN TRINH CAI GOI NGON NGU CHO WINDOWS 10/11
 echo =======================================================
 echo  Vui long chon ngon ngu ban muon xu ly:
 echo.
-echo   [1] Tieng Viet (vi-VN)         [2] Tieng Anh - My (en-US)
-echo   [3] Tieng Anh - Anh (en-GB)    [4] Tieng Nhat Ban (ja-JP)
-echo   [5] Tieng Han Quoc (ko-KR)     [6] Tieng Trung - Gian (zh-CN)
-echo   [7] Tieng Trung - Phon (zh-TW) [8] Tieng Phap (fr-FR)
-echo   [9] Tieng Duc (de-DE)          [10] Tieng Nga (ru-RU)
-echo   [11] Tieng Tay Ban Nha (es-ES) [12] Tieng Bo Dao Nha (pt-BR)
-echo   [13] Tieng Y (it-IT)           [14] Tieng Thai Lan (th-TH)
-echo   [15] Tieng Indonesia (id-ID)   [16] Tieng An Do (hi-IN)
+echo   [1] Tieng Viet (vi-VN)         [2] Tieng Anh - Anh (en-GB)
+echo   [3] Tieng Anh - My (en-US)     [4] Tieng An Do (hi-IN)
+echo   [5] Tieng Bo Dao Nha (pt-BR)   [6] Tieng Duc (de-DE)
+echo   [7] Tieng Han Quoc (ko-KR)     [8] Tieng Indonesia (id-ID)
+echo   [9] Tieng Nga (ru-RU)          [10] Tieng Nhat Ban (ja-JP)
+echo   [11] Tieng Phap (fr-FR)        [12] Tieng Tay Ban Nha (es-ES)
+echo   [13] Tieng Thai Lan (th-TH)    [14] Tieng Trung - Gian (zh-CN)
+echo   [15] Tieng Trung - Phon (zh-TW) [16] Tieng Y (it-IT)
 echo.
 echo   [0] Thoat chuong trinh
 echo =======================================================
@@ -54,21 +56,21 @@ set /p CHOICE="Nhap lua chon cua ban (0-16): "
 if "%CHOICE%"=="0" exit
 
 if "%CHOICE%"=="1" set "LANG_CODE=vi-VN" & set "HEX_ID=042a" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="2" set "LANG_CODE=en-US" & set "HEX_ID=0409" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="3" set "LANG_CODE=en-GB" & set "HEX_ID=0809" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="4" set "LANG_CODE=ja-JP" & set "HEX_ID=0411" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="5" set "LANG_CODE=ko-KR" & set "HEX_ID=0412" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="6" set "LANG_CODE=zh-CN" & set "HEX_ID=0804" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="7" set "LANG_CODE=zh-TW" & set "HEX_ID=0404" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="8" set "LANG_CODE=fr-FR" & set "HEX_ID=040c" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="9" set "LANG_CODE=de-DE" & set "HEX_ID=0407" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="10" set "LANG_CODE=ru-RU" & set "HEX_ID=0419" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="11" set "LANG_CODE=es-ES" & set "HEX_ID=0c0a" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="12" set "LANG_CODE=pt-BR" & set "HEX_ID=0416" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="13" set "LANG_CODE=it-IT" & set "HEX_ID=0410" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="14" set "LANG_CODE=th-TH" & set "HEX_ID=041e" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="15" set "LANG_CODE=id-ID" & set "HEX_ID=0421" & goto :CHOOSE_METHOD
-if "%CHOICE%"=="16" set "LANG_CODE=hi-IN" & set "HEX_ID=0439" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="2" set "LANG_CODE=en-GB" & set "HEX_ID=0809" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="3" set "LANG_CODE=en-US" & set "HEX_ID=0409" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="4" set "LANG_CODE=hi-IN" & set "HEX_ID=0439" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="5" set "LANG_CODE=pt-BR" & set "HEX_ID=0416" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="6" set "LANG_CODE=de-DE" & set "HEX_ID=0407" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="7" set "LANG_CODE=ko-KR" & set "HEX_ID=0412" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="8" set "LANG_CODE=id-ID" & set "HEX_ID=0421" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="9" set "LANG_CODE=ru-RU" & set "HEX_ID=0419" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="10" set "LANG_CODE=ja-JP" & set "HEX_ID=0411" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="11" set "LANG_CODE=fr-FR" & set "HEX_ID=040c" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="12" set "LANG_CODE=es-ES" & set "HEX_ID=0c0a" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="13" set "LANG_CODE=th-TH" & set "HEX_ID=041e" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="14" set "LANG_CODE=zh-CN" & set "HEX_ID=0804" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="15" set "LANG_CODE=zh-TW" & set "HEX_ID=0404" & goto :CHOOSE_METHOD
+if "%CHOICE%"=="16" set "LANG_CODE=it-IT" & set "HEX_ID=0410" & goto :CHOOSE_METHOD
 goto :MENU_LANG
 
 :: ==========================================
