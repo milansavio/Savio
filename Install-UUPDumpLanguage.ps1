@@ -98,9 +98,10 @@ try {
         $b = $prop.Value
         if ($b.arch -ne $arch) { continue }
         # Win10 dung tieu de "Feature update to Windows ...".
-        # Win11 25H2/26H2 tro di dung tieu de tran "Windows 11, version XXHY (build)".
-        # Ca hai dang deu la ban GA; cac dang Insider/CPC/Azure khong khop hai mau nay.
-        if ($b.title -like 'Feature update to Windows*' -or $b.title -like 'Windows 1*, version *') {
+        # Win11 22H2 tro di dung tieu de tran "Windows 11, version XXHY (build)".
+        # Win11 21H2 dung tieu de tran "Windows 11 (build)" hoac "Upgrade to Windows 11 (build)".
+        # Cac dang tren deu la ban GA; cac dang Insider/CPC/Azure khong khop cac mau nay.
+        if ($b.title -like 'Feature update to Windows*' -or $b.title -like 'Windows 1*, version *' -or $b.title -like 'Windows 11 (*' -or $b.title -like 'Upgrade to Windows 11*') {
             $candidates += $b
         }
     }
