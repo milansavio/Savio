@@ -113,15 +113,8 @@ echo.
 echo [Buoc 1] Dang tai va nap day du goi tinh nang (MUI + Keyboard)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-WindowsCapability -Online -Name 'Language.Basic~~~%LANG_CODE%~~~0.0.1.0' -ErrorAction SilentlyContinue"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Install-Language -Language %LANG_CODE% -ErrorAction SilentlyContinue } catch {}"
-echo.
-echo [Kiem tra] Dang xac nhan goi ngon ngu %LANG_CODE% da duoc cai dat...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$l = Get-InstalledLanguage -Language %LANG_CODE% -ErrorAction SilentlyContinue; if ($null -eq $l -or $l.LanguagePacks -notcontains 'LpCab') { exit 1 }"
+call :CHECK_LPCAB
 if %errorlevel% neq 0 (
-    echo.
-    echo [CANH BAO] Goi ngon ngu %LANG_CODE% CHUA duoc cai dat thanh cong!
-    echo Nguyen nhan thuong gap: khong co mang, Windows Update dang bi tam dung,
-    echo hoac ban Windows nay khong ho tro lenh Install-Language.
-    echo Tool se khong doi ngon ngu hien thi khi goi chua co. Hay kiem tra lai roi chay lai.
     pause >nul
     goto :MENU_LANG
 )
@@ -158,15 +151,8 @@ echo Ngon ngu dich: %LANG_CODE% (Chi ngon ngu hien thi)
 echo.
 echo [Buoc 1] Dang tai va nap duy nhat goi ngon ngu hien thi (MUI)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Install-Language -Language %LANG_CODE% -ExcludeFeatures -ErrorAction SilentlyContinue } catch {}"
-echo.
-echo [Kiem tra] Dang xac nhan goi ngon ngu %LANG_CODE% da duoc cai dat...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$l = Get-InstalledLanguage -Language %LANG_CODE% -ErrorAction SilentlyContinue; if ($null -eq $l -or $l.LanguagePacks -notcontains 'LpCab') { exit 1 }"
+call :CHECK_LPCAB
 if %errorlevel% neq 0 (
-    echo.
-    echo [CANH BAO] Goi ngon ngu %LANG_CODE% CHUA duoc cai dat thanh cong!
-    echo Nguyen nhan thuong gap: khong co mang, Windows Update dang bi tam dung,
-    echo hoac ban Windows nay khong ho tro lenh Install-Language.
-    echo Tool se khong doi ngon ngu hien thi khi goi chua co. Hay kiem tra lai roi chay lai.
     pause >nul
     goto :MENU_LANG
 )
@@ -258,3 +244,41 @@ if /i "%REBOOT%"=="Y" (
     pause >nul
 )
 goto :MENU_LANG
+
+
+:: ==========================================
+:: KIEM TRA GOI NGON NGU + FALLBACK UUPDUMP
+:: ==========================================
+:CHECK_LPCAB
+echo.
+echo [Kiem tra] Dang xac nhan goi ngon ngu %LANG_CODE% da duoc cai dat...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$l = Get-InstalledLanguage -Language %LANG_CODE% -ErrorAction SilentlyContinue; if ($null -eq $l -or $l.LanguagePacks -notcontains 'LpCab') { exit 1 }"
+if %errorlevel% == 0 exit /b 0
+echo.
+echo Tai tu Windows Update khong thanh cong - Ban co muon tai ve tu UUPDump? (Y/N)
+set "UUPCHOICE="
+set /p UUPCHOICE="Nhap lua chon (Y/N): "
+if /i not "%UUPCHOICE%"=="Y" (
+    echo [LOI] Ban da huy tai tu UUPDump. Khong cai dat duoc goi ngon ngu %LANG_CODE%.
+    exit /b 1
+)
+call :FALLBACK_UUPDUMP
+if %errorlevel% == 0 exit /b 0
+echo [LOI] Tai tu UUPDump that bai. Khong cai dat duoc goi ngon ngu %LANG_CODE%.
+exit /b 1
+
+:FALLBACK_UUPDUMP
+echo.
+echo [UUPDump] Dang tai goi ngon ngu %LANG_CODE% tu UUPDump...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Invoke-WebRequest -Uri 'https://raw.githubusercontent.com/milansavio/Savio/main/Install-UUPDumpLanguage.ps1' -OutFile '%TEMP%\Install-UUPDumpLanguage.ps1' -UseBasicParsing"
+if %errorlevel% neq 0 (
+    echo [LOI] Khong tai duoc script ho tro UUPDump.
+    exit /b 1
+)
+powershell -NoProfile -ExecutionPolicy Bypass -File "%TEMP%\Install-UUPDumpLanguage.ps1" -Language %LANG_CODE%
+if %errorlevel% neq 0 (
+    echo [LOI] Script UUPDump chay khong thanh cong. File tam nam tai: %TEMP%\Install-UUPDumpLanguage.ps1
+    exit /b 1
+)
+del "%TEMP%\Install-UUPDumpLanguage.ps1" >nul 2>&1
+exit /b 0
