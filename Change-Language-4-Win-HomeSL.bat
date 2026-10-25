@@ -115,7 +115,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-WindowsCapability -O
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Install-Language -Language %LANG_CODE% -ErrorAction SilentlyContinue } catch {}"
 echo.
 echo [Kiem tra] Dang xac nhan goi ngon ngu %LANG_CODE% da duoc cai dat...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$cap = Get-WindowsCapability -Online -Name 'Language.Basic~~~%LANG_CODE%~~~0.0.1.0' -ErrorAction SilentlyContinue; if ($null -eq $cap -or $cap.State -ne 'Installed') { exit 1 }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$l = Get-InstalledLanguage -Language %LANG_CODE% -ErrorAction SilentlyContinue; if ($null -eq $l -or $l.LanguagePacks -notcontains 'LpCab') { exit 1 }"
 if %errorlevel% neq 0 (
     echo.
     echo [CANH BAO] Goi ngon ngu %LANG_CODE% CHUA duoc cai dat thanh cong!
@@ -160,7 +160,7 @@ echo [Buoc 1] Dang tai va nap duy nhat goi ngon ngu hien thi (MUI)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Install-Language -Language %LANG_CODE% -ExcludeFeatures -ErrorAction SilentlyContinue } catch {}"
 echo.
 echo [Kiem tra] Dang xac nhan goi ngon ngu %LANG_CODE% da duoc cai dat...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$cap = Get-WindowsCapability -Online -Name 'Language.Basic~~~%LANG_CODE%~~~0.0.1.0' -ErrorAction SilentlyContinue; if ($null -eq $cap -or $cap.State -ne 'Installed') { exit 1 }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$l = Get-InstalledLanguage -Language %LANG_CODE% -ErrorAction SilentlyContinue; if ($null -eq $l -or $l.LanguagePacks -notcontains 'LpCab') { exit 1 }"
 if %errorlevel% neq 0 (
     echo.
     echo [CANH BAO] Goi ngon ngu %LANG_CODE% CHUA duoc cai dat thanh cong!
