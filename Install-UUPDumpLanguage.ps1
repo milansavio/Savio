@@ -6,7 +6,31 @@ param(
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 
-# Exit codes: 0 = da cai dat xong (LXP), 2 = chi tai duoc file ESD, can convert sang CAB roi cai tay, 1 = loi.
+# Exit codes: 0 = da cai dat xong (Store LXP hoac UUPDump LXP), 2 = chi tai duoc file ESD, can convert sang CAB roi cai tay, 1 = loi.
+# Thu tu fallback, tat ca deu tu dong, khong can nguoi dung thao tac tay:
+#  1. Microsoft Store qua winget (goi LXP chinh thuc, khong phu thuoc build Windows).
+#  2. UUPDump: goi LXP neu co (Win10 moi ngon ngu, Win11 cac ngon ngu partial nhu hi-IN).
+#  3. UUPDump: goi LP dang ESD neu khong co LXP (Win11 26H2 cac ngon ngu full) -> chi tai ve, bao convert tay.
+
+$storeIds = @{
+    'vi-VN' = '9P0W68X0XZPT'
+    'en-US' = '9PDSCC711RVF'
+    'en-GB' = '9NT52VQ39BVN'
+    'ja-JP' = '9N1W692FV4S1'
+    'ko-KR' = '9N4TXPCVRNGF'
+    'zh-CN' = '9NRMNT6GMZ70'
+    'zh-TW' = '9PCJ4DHCQ1JQ'
+    'fr-FR' = '9NHMG4BJKMDG'
+    'de-DE' = '9P6CT0SLW589'
+    'ru-RU' = '9NMJCX77QKPX'
+    'es-ES' = '9NWVGWLHPB1Z'
+    'pt-BR' = '9P8LBDM4FW35'
+    'it-IT' = '9P8PQWNS6VJX'
+    'th-TH' = '9MSTWFRL0LR4'
+    'id-ID' = '9P4X3N4SDK8P'
+    'hi-IN' = '9NZC3GRX8LD3'
+}
+
 function Test-LxpInstalled {
     param([string]$Lang)
     $key = $Lang.Replace('-', '').ToLower()
@@ -30,6 +54,30 @@ try {
         exit 0
     }
 
+    # Buoc 1: Microsoft Store qua winget.
+    $productId = $storeIds[$Language]
+    if ($null -ne $productId) {
+        $winget = Get-Command winget -ErrorAction SilentlyContinue
+        if ($null -ne $winget) {
+            Write-Host "Dang thu cai goi ngon ngu $Language tu Microsoft Store (winget)..."
+            try {
+                winget install --id $productId --exact --source msstore --accept-package-agreements --accept-source-agreements
+            } catch {
+                Write-Host "Winget bao loi: $($_.Exception.Message)"
+            }
+            if (Test-LxpInstalled -Lang $Language) {
+                Write-Host "Cai dat goi ngon ngu tu Microsoft Store thanh cong."
+                exit 0
+            }
+            Write-Host "Khong cai duoc qua Store, chuyen sang thu UUPDump..."
+        } else {
+            Write-Host "Khong tim thay winget, chuyen sang thu UUPDump..."
+        }
+    } else {
+        Write-Host "Ngon ngu $Language chua co ma Store, chuyen sang thu UUPDump..."
+    }
+
+    # Buoc 2+3: UUPDump.
     $reg = Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion'
     $buildNumber = $reg.CurrentBuildNumber
     $archRaw = $env:PROCESSOR_ARCHITECTURE
@@ -75,7 +123,7 @@ try {
     $info = Invoke-RestMethod -Uri "https://api.uupdump.net/get.php?id=$($selected.uuid)" -UseBasicParsing
     $files = $info.response.files
 
-    # Truong hop 1: LXP (Win10 moi ngon ngu, Win11 cac ngon ngu partial nhu hi-IN).
+    # Buoc 2: LXP tu UUPDump (Win10 moi ngon ngu, Win11 cac ngon ngu partial nhu hi-IN).
     $wantLxp = "LanguageExperiencePack.$Language.Neutral.appx"
     $lxpEntry = $null
     $lxpName = $null
@@ -107,9 +155,12 @@ try {
         exit 1
     }
 
-    # Truong hop 2: LP dang ESD (Win11 26H2 cac ngon ngu full nhu vi-VN khong co LXP).
+    # Buoc 3: LP dang ESD tu UUPDump (Win11 26H2 cac ngon ngu full khong co LXP).
     # DISM chi cai duoc file CAB, khong cai truc tiep file ESD, nen tool chi tai ve
     # va bao duong dan de nguoi dung convert sang CAB (wimlib/ADK) roi cai tay.
+    # Ly do khong tu dong convert: file ESD nay khong phai 1 goi cai dat duy nhat ma la
+    # toan bo kho WinSxS cua ngon ngu (464 file .mum/.cat + file .mui), khong the dong
+    # thanh 1 file CAB de DISM cai duoc.
     $langEsc = [regex]::Escape($Language)
     $esdPattern = "(?i)^Microsoft-Windows-Client-LanguagePack-Package[-_].*[-_]$langEsc\.esd$"
     $esdEntry = $null
@@ -140,6 +191,6 @@ try {
     Write-Host "Khong tim thay goi ngon ngu cho $Language trong ban nay (ca LXP va LP ESD)."
     exit 1
 } catch {
-    Write-Host "Loi UUPDump: $($_.Exception.Message)"
+    Write-Host "Loi: $($_.Exception.Message)"
     exit 1
 }
