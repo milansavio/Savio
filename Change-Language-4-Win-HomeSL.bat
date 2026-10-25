@@ -113,6 +113,18 @@ echo.
 echo [Buoc 1] Dang tai va nap day du goi tinh nang (MUI + Keyboard)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-WindowsCapability -Online -Name 'Language.Basic~~~%LANG_CODE%~~~0.0.1.0' -ErrorAction SilentlyContinue"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Install-Language -Language %LANG_CODE% -ErrorAction SilentlyContinue } catch {}"
+echo.
+echo [Kiem tra] Dang xac nhan goi ngon ngu %LANG_CODE% da duoc cai dat...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$cap = Get-WindowsCapability -Online -Name 'Language.Basic~~~%LANG_CODE%~~~0.0.1.0' -ErrorAction SilentlyContinue; if ($null -eq $cap -or $cap.State -ne 'Installed') { exit 1 }"
+if %errorlevel% neq 0 (
+    echo.
+    echo [CANH BAO] Goi ngon ngu %LANG_CODE% CHUA duoc cai dat thanh cong!
+    echo Nguyen nhan thuong gap: khong co mang, Windows Update dang bi tam dung,
+    echo hoac ban Windows nay khong ho tro lenh Install-Language.
+    echo Tool se khong doi ngon ngu hien thi khi goi chua co. Hay kiem tra lai roi chay lai.
+    pause >nul
+    goto :MENU_LANG
+)
 
 echo.
 echo [Buoc 2] Dang ghi de ngon ngu hien thi he thong (Preferred UI)...
@@ -146,6 +158,18 @@ echo Ngon ngu dich: %LANG_CODE% (Chi ngon ngu hien thi)
 echo.
 echo [Buoc 1] Dang tai va nap duy nhat goi ngon ngu hien thi (MUI)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Install-Language -Language %LANG_CODE% -ExcludeFeatures -ErrorAction SilentlyContinue } catch {}"
+echo.
+echo [Kiem tra] Dang xac nhan goi ngon ngu %LANG_CODE% da duoc cai dat...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$cap = Get-WindowsCapability -Online -Name 'Language.Basic~~~%LANG_CODE%~~~0.0.1.0' -ErrorAction SilentlyContinue; if ($null -eq $cap -or $cap.State -ne 'Installed') { exit 1 }"
+if %errorlevel% neq 0 (
+    echo.
+    echo [CANH BAO] Goi ngon ngu %LANG_CODE% CHUA duoc cai dat thanh cong!
+    echo Nguyen nhan thuong gap: khong co mang, Windows Update dang bi tam dung,
+    echo hoac ban Windows nay khong ho tro lenh Install-Language.
+    echo Tool se khong doi ngon ngu hien thi khi goi chua co. Hay kiem tra lai roi chay lai.
+    pause >nul
+    goto :MENU_LANG
+)
 
 echo.
 echo [Buoc 2] Dang ghi de ngon ngu hien thi he thong (Preferred UI)...
@@ -161,6 +185,10 @@ echo [Buoc 4] Dang ep thay doi ma vung Machine ID thanh %HEX_ID%...
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "Default" /t REG_SZ /d "%HEX_ID%" /f >nul
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "InstallLanguage" /t REG_SZ /d "%HEX_ID%" /f >nul
 
+echo.
+echo [Buoc 5] Dang them ngon ngu vao danh sach ngon ngu cua User...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$List = Get-WinUserLanguageList; if (!($List.LanguageTag -contains '%LANG_CODE%')) { $List.Add('%LANG_CODE%') }; Set-WinUserLanguageList -LanguageList $List -Force" >nul 2>&1
+
 goto :FINALIZE
 
 :: ------------------------------------------
@@ -175,6 +203,18 @@ echo Ngon ngu dich: %LANG_CODE% (Chi bo go ban phim)
 echo.
 echo [Buoc 1] Dang tai va nap thanh phan bo go (Basic Input)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-WindowsCapability -Online -Name 'Language.Basic~~~%LANG_CODE%~~~0.0.1.0' -ErrorAction SilentlyContinue"
+echo.
+echo [Kiem tra] Dang xac nhan goi ngon ngu %LANG_CODE% da duoc cai dat...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$cap = Get-WindowsCapability -Online -Name 'Language.Basic~~~%LANG_CODE%~~~0.0.1.0' -ErrorAction SilentlyContinue; if ($null -eq $cap -or $cap.State -ne 'Installed') { exit 1 }"
+if %errorlevel% neq 0 (
+    echo.
+    echo [CANH BAO] Goi ngon ngu %LANG_CODE% CHUA duoc cai dat thanh cong!
+    echo Nguyen nhan thuong gap: khong co mang, Windows Update dang bi tam dung,
+    echo hoac ban Windows nay khong ho tro lenh Install-Language.
+    echo Tool se khong doi ngon ngu hien thi khi goi chua co. Hay kiem tra lai roi chay lai.
+    pause >nul
+    goto :MENU_LANG
+)
 
 echo.
 echo [Buoc 2] Dang them layout ban phim vao danh sach cua User hien tai...
