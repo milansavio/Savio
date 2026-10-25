@@ -119,23 +119,7 @@ if %errorlevel% neq 0 (
     goto :MENU_LANG
 )
 
-echo.
-echo [Buoc 2] Dang ghi de ngon ngu hien thi he thong (Preferred UI)...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-SystemPreferredUILanguage -Language %LANG_CODE%" >nul 2>&1
-
-echo.
-echo [Buoc 3] Dang can thiep Registry cho phan hien thi UI...
-reg add "HKCU\Control Panel\International" /v "LocaleName" /t REG_SZ /d "%LANG_CODE%" /f >nul
-reg add "HKCU\Control Panel\Desktop" /v "PreferredUILanguages" /t REG_MULTI_SZ /d "%LANG_CODE%" /f >nul
-
-echo.
-echo [Buoc 4] Dang ep thay doi ma vung Machine ID thanh %HEX_ID%...
-reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "Default" /t REG_SZ /d "%HEX_ID%" /f >nul
-reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "InstallLanguage" /t REG_SZ /d "%HEX_ID%" /f >nul
-
-echo.
-echo [Buoc 5] Dang dong bo va nap ban phim nhap lieu...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$List = New-WinUserLanguageList -Language %LANG_CODE%; if ('%LANG_CODE%' -ne 'en-US') { $List.Add('en-US') }; Set-WinUserLanguageList -LanguageList $List -Force" >nul 2>&1
+call :APPLY_DISPLAY
 
 goto :ACTIVATE_BAR
 
@@ -157,23 +141,7 @@ if %errorlevel% neq 0 (
     goto :MENU_LANG
 )
 
-echo.
-echo [Buoc 2] Dang ghi de ngon ngu hien thi he thong (Preferred UI)...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-SystemPreferredUILanguage -Language %LANG_CODE%" >nul 2>&1
-
-echo.
-echo [Buoc 3] Dang can thiep Registry cho phan hien thi UI...
-reg add "HKCU\Control Panel\International" /v "LocaleName" /t REG_SZ /d "%LANG_CODE%" /f >nul
-reg add "HKCU\Control Panel\Desktop" /v "PreferredUILanguages" /t REG_MULTI_SZ /d "%LANG_CODE%" /f >nul
-
-echo.
-echo [Buoc 4] Dang ep thay doi ma vung Machine ID thanh %HEX_ID%...
-reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "Default" /t REG_SZ /d "%HEX_ID%" /f >nul
-reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "InstallLanguage" /t REG_SZ /d "%HEX_ID%" /f >nul
-
-echo.
-echo [Buoc 5] Dang them ngon ngu vao danh sach ngon ngu cua User...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$List = Get-WinUserLanguageList; if (!($List.LanguageTag -contains '%LANG_CODE%')) { $List.Add('%LANG_CODE%') }; Set-WinUserLanguageList -LanguageList $List -Force" >nul 2>&1
+call :APPLY_DISPLAY
 
 goto :FINALIZE
 
@@ -289,4 +257,35 @@ if %errorlevel% neq 0 (
     exit /b 1
 )
 del "%TEMP%\Install-UUPDumpLanguage.ps1" >nul 2>&1
+exit /b 0
+
+:: ==========================================
+:: AP DUNG NGON NGU HIEN THI (DUNG CHO OPTION 1 VA 2)
+:: Nguyen tac: ngon ngu moi phai dung DAU danh sach ngon ngu cua User,
+:: vi Windows lay ngon ngu dau danh sach (co goi da cai) lam ngon ngu hien thi.
+:: Chi them vao cuoi danh sach thi en-US van dung dau va giao dien van tieng Anh.
+:: ==========================================
+:APPLY_DISPLAY
+echo.
+echo [Buoc 2] Dang ghi de ngon ngu hien thi he thong (Preferred UI)...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-SystemPreferredUILanguage -Language %LANG_CODE%" >nul 2>&1
+
+echo.
+echo [Buoc 3] Dang can thiep Registry cho phan hien thi UI...
+reg add "HKCU\Control Panel\International" /v "LocaleName" /t REG_SZ /d "%LANG_CODE%" /f >nul
+reg add "HKCU\Control Panel\Desktop" /v "PreferredUILanguages" /t REG_MULTI_SZ /d "%LANG_CODE%" /f >nul
+
+echo.
+echo [Buoc 4] Dang ep thay doi ma vung Machine ID thanh %HEX_ID%...
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "Default" /t REG_SZ /d "%HEX_ID%" /f >nul
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "InstallLanguage" /t REG_SZ /d "%HEX_ID%" /f >nul
+
+echo.
+echo [Buoc 5] Dang dat ngon ngu %LANG_CODE% len DAU danh sach ngon ngu cua User (giu nguyen cac ngon ngu cu ben duoi)...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$Old = Get-WinUserLanguageList; $New = New-WinUserLanguageList -Language %LANG_CODE%; foreach ($l in $Old) { if ($l.LanguageTag -ne '%LANG_CODE%') { $New.Add($l.LanguageTag) } }; Set-WinUserLanguageList -LanguageList $New -Force" >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-WinUILanguageOverride -Language %LANG_CODE%" >nul 2>&1
+
+echo.
+echo [Kiem tra] Dang xac nhan cac lop hien thi sau khi ap dung...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$list = Get-WinUserLanguageList; $first = $list[0].LanguageTag; $ovr = Get-WinUILanguageOverride; $sys = Get-SystemPreferredUILanguage; $lp = Get-InstalledLanguage -Language %LANG_CODE% -ErrorAction SilentlyContinue; $hasLp = ($null -ne $lp -and $lp.LanguagePacks -contains 'LpCab'); Write-Host ('[Kiem tra] Goi LpCab: ' + $(if ($hasLp) { 'DA CAI' } else { 'CHUA CO' })); Write-Host ('[Kiem tra] Ngon ngu dau danh sach User: ' + $first); Write-Host ('[Kiem tra] WinUI Override: ' + $ovr); Write-Host ('[Kiem tra] System Preferred UI: ' + $sys); if (($first -eq '%LANG_CODE%') -and ($ovr -eq '%LANG_CODE%') -and ($sys -eq '%LANG_CODE%')) { Write-Host ('[Kiem tra] OK - Sau khi khoi dong lai, giao dien se hien thi bang %LANG_CODE%.') } else { Write-Host '[CANH BAO] Cac lop hien thi chua khop het - giao dien co the van hien thi ngon ngu cu sau khi khoi dong lai, hay kiem tra lai trong Settings.' }"
 exit /b 0
