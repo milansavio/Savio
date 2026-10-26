@@ -32,9 +32,9 @@ cls
 :: ==========================================
 :MENU_LANG
 cls
-echo =======================================================
+echo =====================================================================
 echo      TIEN TRINH CAI GOI NGON NGU CHO WINDOWS 10/11
-echo =======================================================
+echo =====================================================================
 echo  Vui long chon ngon ngu ban muon xu ly:
 echo.
 echo   [1] Tieng Viet (vi-VN)           ^|  [2] Tieng Anh - Anh (en-GB)
@@ -47,7 +47,7 @@ echo   [13] Tieng Thai Lan (th-TH)      ^|  [14] Tieng Trung - Gian (zh-CN)
 echo   [15] Tieng Trung - Phon (zh-TW)  ^|  [16] Tieng Y (it-IT)
 echo.
 echo   [0] Thoat chuong trinh
-echo =======================================================
+echo =====================================================================
 echo.
 
 set "CHOICE="
