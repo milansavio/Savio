@@ -1,4 +1,6 @@
 @echo off
+:: Rong console de chu khong bi go dong khi keo cua so
+mode con cols=170 lines=45
 :: Giao dien cmd: nen trang, chu den
 color F0
 title Tools Thay Doi Ngon Ngu Windows - Windows Home Single Language by Savio
