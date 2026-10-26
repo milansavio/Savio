@@ -37,14 +37,14 @@ echo      TIEN TRINH CAI GOI NGON NGU CHO WINDOWS 10/11
 echo =======================================================
 echo  Vui long chon ngon ngu ban muon xu ly:
 echo.
-echo   [1] Tieng Viet (vi-VN)         [2] Tieng Anh - Anh (en-GB)
-echo   [3] Tieng Anh - My (en-US)     [4] Tieng An Do (hi-IN)
-echo   [5] Tieng Bo Dao Nha (pt-BR)   [6] Tieng Duc (de-DE)
-echo   [7] Tieng Han Quoc (ko-KR)     [8] Tieng Indonesia (id-ID)
-echo   [9] Tieng Nga (ru-RU)          [10] Tieng Nhat Ban (ja-JP)
-echo   [11] Tieng Phap (fr-FR)        [12] Tieng Tay Ban Nha (es-ES)
-echo   [13] Tieng Thai Lan (th-TH)    [14] Tieng Trung - Gian (zh-CN)
-echo   [15] Tieng Trung - Phon (zh-TW) [16] Tieng Y (it-IT)
+echo   [1] Tieng Viet (vi-VN)           ^|  [2] Tieng Anh - Anh (en-GB)
+echo   [3] Tieng Anh - My (en-US)       ^|  [4] Tieng An Do (hi-IN)
+echo   [5] Tieng Bo Dao Nha (pt-BR)     ^|  [6] Tieng Duc (de-DE)
+echo   [7] Tieng Han Quoc (ko-KR)       ^|  [8] Tieng Indonesia (id-ID)
+echo   [9] Tieng Nga (ru-RU)            ^|  [10] Tieng Nhat Ban (ja-JP)
+echo   [11] Tieng Phap (fr-FR)          ^|  [12] Tieng Tay Ban Nha (es-ES)
+echo   [13] Tieng Thai Lan (th-TH)      ^|  [14] Tieng Trung - Gian (zh-CN)
+echo   [15] Tieng Trung - Phon (zh-TW)  ^|  [16] Tieng Y (it-IT)
 echo.
 echo   [0] Thoat chuong trinh
 echo =======================================================
