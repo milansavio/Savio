@@ -271,6 +271,12 @@ exit /b 0
 :: ==========================================
 :APPLY_DISPLAY
 echo.
+set "IS_LIP=0"
+if /i "%LANG_CODE%"=="vi-VN" set "IS_LIP=1"
+if /i "%LANG_CODE%"=="hi-IN" set "IS_LIP=1"
+if /i "%LANG_CODE%"=="id-ID" set "IS_LIP=1"
+if "%IS_LIP%"=="1" echo [CANH BAO] %LANG_CODE% la ngon ngu dang LIP (ban dich mot phan).
+if "%IS_LIP%"=="1" echo [CANH BAO] Tren Windows 10 cap nhat moi nhat, ung dung Settings co the van tieng Anh; cac ngon ngu day du (vd: ko-KR) khong bi anh huong.
 echo [Buoc 2] Dang ghi de ngon ngu hien thi he thong (Preferred UI)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-SystemPreferredUILanguage -Language %LANG_CODE%" >nul 2>&1
 
