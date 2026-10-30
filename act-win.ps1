@@ -6,20 +6,33 @@ pushed to GitHub, and is stored only locally, encrypted, until phase 2
 finishes. No bypass, no KMS server, no other activation method is used.
 If the supplied key does not activate, the script stops and shows the
 error instead of trying anything else.
-Flow: key prompt -> if already Pro, activate now -> otherwise create a
-logon task for phase 2, upgrade the edition with Microsoft's public
-generic Pro upgrade key, reboot, phase 2 installs the user's key and
-checks for 30 seconds that the system is Licensed and that the last 5
-characters match the key entered. On a match it removes the task and
+Menu at the start, interface is white background with black text:
+  1 Kich hoat bang Key co san - the original flow below.
+  2 Up Windows Pro khong kich hoat - upgrade only, no key prompt,
+    no activation. A cleanup task runs once at logon after the reboot,
+    then deletes the ActWin tasks and ActWin temp files and reports
+    that the machine is now Pro but not activated.
+Choice 1 flow: key prompt -> if already Pro, activate now -> otherwise
+create a logon task for phase 2, upgrade the edition with Microsoft's
+public generic Pro upgrade key, reboot, phase 2 installs the user's key
+and checks for 30 seconds that the system is Licensed and that the last
+5 characters match the key entered. On a match it removes the task and
 the local files and shows success. On a mismatch it removes the task
 and the key file and shows the error.
 Run as Administrator. Delivery: irm <raw url> | iex
 #>
 $ErrorActionPreference = 'Stop'
+try {
+    $Host.UI.RawUI.BackgroundColor = 'White'
+    $Host.UI.RawUI.ForegroundColor = 'Black'
+    Clear-Host
+} catch { }
 $TaskName = 'ActWin-Phase2'
+$CleanupTaskName = 'ActWin-Cleanup'
 $WorkDir  = Join-Path $env:ProgramData 'ActWin'
 $KeyFile  = Join-Path $WorkDir 'key.txt'
 $Phase2File = Join-Path $WorkDir 'act-win-phase2.ps1'
+$CleanupFile = Join-Path $WorkDir 'act-win-cleanup.ps1'
 $GenericProKey = 'VK7JG-NPHTM-C97JM-9MPGT-3V66T'
 $RawUrl = 'https://raw.githubusercontent.com/milansavio/Savio/main/act-win.ps1'
 
@@ -44,6 +57,18 @@ function Get-ProKey {
         $key = $input.Trim().ToUpper() -replace '\s+', ''
         if ($key -match '^[A-Z0-9]{5}(-[A-Z0-9]{5}){4}$') { return $key }
         Show-Info 'Key chua dung dinh dang 5 nhom x 5 ky tu. Vi du: XXXXX-XXXXX-XXXXX-XXXXX-XXXXX' 'ActWin - Key chua hop le'
+    }
+}
+function Get-MenuChoice {
+    Write-Host ''
+    Write-Host 'ActWin - Chon 1 trong 2:'
+    Write-Host '  1. Kích hoạt bằng Key có sẵn'
+    Write-Host '  2. Up Windows Pro không kích hoạt'
+    Write-Host ''
+    while ($true) {
+        $choice = (Read-Host 'Nhap 1 hoac 2').Trim()
+        if ($choice -eq '1' -or $choice -eq '2') { return $choice }
+        Write-Host 'Chi nhap 1 hoac 2.'
     }
 }
 function Test-Activated($Last5) {
@@ -124,6 +149,40 @@ try {
 }
 '@
 
+$CleanupTemplate = @'
+$ErrorActionPreference = 'Stop'
+try {
+    $Host.UI.RawUI.BackgroundColor = 'White'
+    $Host.UI.RawUI.ForegroundColor = 'Black'
+} catch { }
+Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+$CTask = '__CTASK__'
+$CFile = '__CFILE__'
+$CWorkDir = '__CWORKDIR__'
+function Show-InfoC($Text, $Title = 'ActWin') {
+    try { [System.Windows.Forms.MessageBox]::Show($Text, $Title) | Out-Null }
+    catch { Write-Host $Text }
+}
+try {
+    $editionC = ''
+    try { $editionC = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID } catch { }
+    if ($editionC -match 'Professional') {
+        Show-InfoC 'Da upgrade len Windows Pro. Lua chon 2 khong kich hoat, ban co the kich hoat sau bang key cua ban.' 'ActWin - Da len Pro'
+    } else {
+        Show-InfoC 'May chua len Pro. Hay chay lai act-win.ps1 va chon lai.' 'ActWin - Chua len Pro'
+    }
+} catch {
+    Show-InfoC "Don dep gap loi: $($_.Exception.Message)" 'ActWin - Loi'
+} finally {
+    try { Unregister-ScheduledTask -TaskName $CTask -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+    try { Unregister-ScheduledTask -TaskName 'ActWin-Phase2' -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+    try { Get-ChildItem $env:TEMP -Filter 'ActWin*' -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue } catch { }
+    try { if (Test-Path $CWorkDir) { Get-ChildItem $CWorkDir -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue } } catch { }
+    try { if (Test-Path $CFile) { Remove-Item $CFile -Force -ErrorAction SilentlyContinue } } catch { }
+    try { if ((Test-Path $CWorkDir) -and -not (Get-ChildItem $CWorkDir -ErrorAction SilentlyContinue)) { Remove-Item $CWorkDir -Force -ErrorAction SilentlyContinue } } catch { }
+}
+'@
+
 # Main flow
 if (-not (Test-IsAdmin)) {
     $cmd = "irm '$RawUrl' | iex"
@@ -134,6 +193,35 @@ if (-not (Test-IsAdmin)) {
 $edition = ''
 try { $edition = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID } catch { }
 $isPro = ($edition -match 'Professional')
+
+$menuChoice = Get-MenuChoice
+
+if ($menuChoice -eq '2') {
+    if ($isPro) {
+        Show-Info 'May da la Windows Pro. Lua chon 2 chi upgrade, khong can lam gi them va khong kich hoat.' 'ActWin - Da la Pro'
+        exit
+    }
+    if (-not (Test-Path $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null }
+    $cleanup = $CleanupTemplate.Replace('__CTASK__', $CleanupTaskName).Replace('__CFILE__', $CleanupFile).Replace('__CWORKDIR__', $WorkDir)
+    Set-Content $CleanupFile $cleanup -Force -Encoding UTF8
+    $currentUser2 = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $action2 = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy RemoteSigned -File `"$CleanupFile`""
+    $trigger2 = New-ScheduledTaskTrigger -AtLogOn -User $currentUser2
+    $principal2 = New-ScheduledTaskPrincipal -UserId $currentUser2 -LogonType Interactive -RunLevel Highest
+    $settings2 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+    Register-ScheduledTask -TaskName $CleanupTaskName -Action $action2 -Trigger $trigger2 -Principal $principal2 -Settings $settings2 -Force | Out-Null
+    & changepk.exe /ProductKey $GenericProKey
+    if ($LASTEXITCODE -ne 0) {
+        Show-Info "Upgrade len Pro chua thanh cong (changepk exit code $LASTEXITCODE). Task don dep va file tam cua ActWin da duoc xoa, hay chay lai sau khi kiem tra." 'ActWin - Loi upgrade'
+        try { Unregister-ScheduledTask -TaskName $CleanupTaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+        try { if (Test-Path $CleanupFile) { Remove-Item $CleanupFile -Force -ErrorAction SilentlyContinue } } catch { }
+        try { if ((Test-Path $WorkDir) -and -not (Get-ChildItem $WorkDir -ErrorAction SilentlyContinue)) { Remove-Item $WorkDir -Force -ErrorAction SilentlyContinue } } catch { }
+        exit
+    }
+    Show-Info 'Da upgrade len Pro, khong kich hoat theo lua chon 2. May se khoi dong lai sau 10 giay, sau khi dang nhap lai task don dep se tu xoa task cua ActWin va file tam cua ActWin.' 'ActWin - Dang khoi dong lai'
+    shutdown.exe /r /t 10 | Out-Null
+    exit
+}
 
 $key = Get-ProKey
 if (-not $key) { Write-Host 'Da huy: khong co key.'; exit }
