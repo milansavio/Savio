@@ -16,6 +16,10 @@ Fix 2026-10-30: changepk is fire-and-forget. Its exit code must NOT be
 treated as upgrade failure, and no forced reboot is issued while
 "Preparing for upgrade" runs. The logon task and key file are kept
 until Windows reboots itself after preparation.
+Fix 2026-10-30: phase 2 DPAPI read. The encrypted key file is written
+with NoNewline and Ascii, and phase 2 reads it with Trim plus a BOM
+trim and an empty check, because a trailing newline caused
+"Input string was not in a correct format" on some machines.
 Choice 1 flow: key prompt -> if already Pro, activate now -> otherwise
 create a logon task for phase 2, upgrade the edition with Microsoft's
 public generic Pro upgrade key, Windows reboots itself, phase 2 installs the user's key
@@ -119,7 +123,10 @@ function Show-Info2($Text, $Title = 'ActWin') {
 }
 try {
     if (-not (Test-Path $KeyFile)) { throw 'Khong tim thay file key da ma hoa. Hay chay lai act-win.ps1 va nhap key.' }
-    $secure = ConvertTo-SecureString (Get-Content $KeyFile -Raw)
+    $enc = (Get-Content $KeyFile -Raw).Trim()
+    $enc = $enc.Trim([char]0xFEFF)
+    if ([string]::IsNullOrWhiteSpace($enc)) { throw 'File key da ma hoa rong. Hay chay lai act-win.ps1 va nhap key.' }
+    $secure = ConvertTo-SecureString $enc
     $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     $key = [Runtime.InteropServices.Marshal]::PtrToStringAuto($ptr)
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
@@ -243,7 +250,8 @@ if ($isPro) {
 # Not Pro yet: save phase 2 first, then upgrade the edition, then reboot.
 if (-not (Test-Path $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null }
 $secureKey = ConvertTo-SecureString $key -AsPlainText -Force
-$secureKey | ConvertFrom-SecureString | Set-Content $KeyFile -Force
+$encKey = $secureKey | ConvertFrom-SecureString
+Set-Content $KeyFile $encKey -Force -NoNewline -Encoding Ascii
 
 $phase2 = $Phase2Template.Replace('__TASK__', $TaskName).Replace('__KEYFILE__', $KeyFile).Replace('__PHASE2FILE__', $Phase2File).Replace('__WORKDIR__', $WorkDir)
 Set-Content $Phase2File $phase2 -Force -Encoding UTF8
