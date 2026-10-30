@@ -12,9 +12,13 @@ Menu at the start, interface is white background with black text:
     no activation. A cleanup task runs once at logon after the reboot,
     then deletes the ActWin tasks and ActWin temp files and reports
     that the machine is now Pro but not activated.
+Fix 2026-10-30: changepk is fire-and-forget. Its exit code must NOT be
+treated as upgrade failure, and no forced reboot is issued while
+"Preparing for upgrade" runs. The logon task and key file are kept
+until Windows reboots itself after preparation.
 Choice 1 flow: key prompt -> if already Pro, activate now -> otherwise
 create a logon task for phase 2, upgrade the edition with Microsoft's
-public generic Pro upgrade key, reboot, phase 2 installs the user's key
+public generic Pro upgrade key, Windows reboots itself, phase 2 installs the user's key
 and checks for 30 seconds that the system is Licensed and that the last
 5 characters match the key entered. On a match it removes the task and
 the local files and shows success. On a mismatch it removes the task
@@ -210,16 +214,15 @@ if ($menuChoice -eq '2') {
     $principal2 = New-ScheduledTaskPrincipal -UserId $currentUser2 -LogonType Interactive -RunLevel Highest
     $settings2 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
     Register-ScheduledTask -TaskName $CleanupTaskName -Action $action2 -Trigger $trigger2 -Principal $principal2 -Settings $settings2 -Force | Out-Null
+    # changepk launches the edition upgrade and returns while Windows is
+    # still showing "Preparing for upgrade". Its exit code is therefore
+    # NOT a failure signal here: do not delete the cleanup task on a
+    # non-zero code, and do not force a reboot while preparation runs.
+    # Windows reboots itself when preparation finishes; the cleanup task
+    # stays registered and runs at logon after that reboot. If no
+    # Preparing screen appears at all, check the edition and run again.
     & changepk.exe /ProductKey $GenericProKey
-    if ($LASTEXITCODE -ne 0) {
-        Show-Info "Upgrade len Pro chua thanh cong (changepk exit code $LASTEXITCODE). Task don dep va file tam cua ActWin da duoc xoa, hay chay lai sau khi kiem tra." 'ActWin - Loi upgrade'
-        try { Unregister-ScheduledTask -TaskName $CleanupTaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
-        try { if (Test-Path $CleanupFile) { Remove-Item $CleanupFile -Force -ErrorAction SilentlyContinue } } catch { }
-        try { if ((Test-Path $WorkDir) -and -not (Get-ChildItem $WorkDir -ErrorAction SilentlyContinue)) { Remove-Item $WorkDir -Force -ErrorAction SilentlyContinue } } catch { }
-        exit
-    }
-    Show-Info 'Da upgrade len Pro, khong kich hoat theo lua chon 2. May se khoi dong lai sau 10 giay, sau khi dang nhap lai task don dep se tu xoa task cua ActWin va file tam cua ActWin.' 'ActWin - Dang khoi dong lai'
-    shutdown.exe /r /t 10 | Out-Null
+    Show-Info 'Dang chuan bi upgrade len Pro, khong kich hoat theo lua chon 2. Dung tat may. May se tu khoi dong lai khi chuan bi xong, sau khi dang nhap lai task don dep se tu xoa task cua ActWin va file tam cua ActWin. Neu khong thay man hinh Preparing va may khong tu khoi dong lai, hay khoi dong lai thu cong - task don dep van con va se chay luc dang nhap.' 'ActWin - Dang chuan bi upgrade'
     exit
 }
 
@@ -252,13 +255,13 @@ $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interact
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
 
+# changepk launches the edition upgrade and returns while Windows is
+# still showing "Preparing for upgrade". Its exit code is therefore
+# NOT a failure signal here: do not delete the phase 2 task or the
+# encrypted key file on a non-zero code, and do not force a reboot
+# while preparation runs. Windows reboots itself when preparation
+# finishes; phase 2 stays registered and runs at logon after that
+# reboot. If no Preparing screen appears at all, check the edition
+# and run again.
 & changepk.exe /ProductKey $GenericProKey
-if ($LASTEXITCODE -ne 0) {
-    Show-Info "Nang cap len Pro chua thanh cong (changepk exit code $LASTEXITCODE). Task phase 2 va file key da duoc xoa, hay chay lai sau khi kiem tra." 'ActWin - Loi nang cap'
-    Remove-Phase2Artifacts
-    try { if (Test-Path $Phase2File) { Remove-Item $Phase2File -Force -ErrorAction SilentlyContinue } } catch { }
-    exit
-}
-
-Show-Info 'Da nang cap len Pro. May se khoi dong lai sau 10 giay, sau khi dang nhap lai phase 2 se tu nhap key cua ban va kiem tra kich hoat.' 'ActWin - Dang khoi dong lai'
-shutdown.exe /r /t 10 | Out-Null
+Show-Info 'Dang chuan bi upgrade len Pro. Dung tat may. May se tu khoi dong lai khi chuan bi xong, sau khi dang nhap lai phase 2 se tu nhap key cua ban va kiem tra kich hoat. Neu khong thay man hinh Preparing va may khong tu khoi dong lai, hay khoi dong lai thu cong - task phase 2 van con va se chay luc dang nhap.' 'ActWin - Dang chuan bi upgrade'
