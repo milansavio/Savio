@@ -36,6 +36,10 @@ non-modal "Dang kich hoat, vui long doi..." dialog in a separate
 process plus console progress lines, and close the dialog when the
 check finishes, so the user knows the script is still running. The
 dialog auto-closes after 180 seconds as a safety net.
+IID layout 2026-10-31: the IID textbox must use CRLF line breaks,
+not LF only, or WinForms shows all steps on one wrapped line. Layout
+is now: link line aka.ms/aoh, blank line, one step per line, blank
+line, then the single-line copy-all form, in both inline and phase 2.
 Choice 1 flow: key prompt -> if already Pro, activate now -> otherwise
 create a logon task for phase 2, upgrade the edition with Microsoft's
 public generic Pro upgrade key, Windows reboots itself, phase 2 installs the user's key
@@ -216,13 +220,13 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput) {
     }
     $iidGroups = @()
     for ($gi = 0; $gi -lt $iidDigits.Length; $gi += 6) { $iidGroups += $iidDigits.Substring($gi, [Math]::Min(6, $iidDigits.Length - $gi)) }
-    $iidText = "Installation ID (IID) - copy tung block theo thu tu vao trang cua Microsoft de lay Confirmation ID:`n"
-    for ($gi = 0; $gi -lt $iidGroups.Count; $gi++) { $iidText += "Buoc $($gi + 1): $($iidGroups[$gi])`n" }
-    $iidText += "`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
+    $iidText = "Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID`r`n`r`n"
+    for ($gi = 0; $gi -lt $iidGroups.Count; $gi++) { $iidText += "Buoc $($gi + 1): $($iidGroups[$gi])`r`n" }
+    $iidText += "`r`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
     try { Set-Clipboard ($iidGroups -join ' ') } catch { }
     try { $desk = Join-Path $env:USERPROFILE 'Desktop'; if (Test-Path $desk) { Set-Content (Join-Path $desk 'ActWin-IID.txt') $iidText -Force -Encoding UTF8 } } catch { }
     try { Set-Content (Join-Path $env:TEMP 'ActWin-IID.txt') $iidText -Force -Encoding UTF8 } catch { }
-    $iidResult = Show-TextForm 'ActWin - Installation ID' 'Copy IID theo tung buoc 1, 2, 3... vao trang cua Microsoft, lay Confirmation ID (CID) roi bam OK de nhap CID:' $iidText $true
+    $iidResult = Show-TextForm 'ActWin - Installation ID' 'Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID (CID) roi bam OK de nhap CID:' $iidText $true
     if ($null -eq $iidResult) { return $false }
     $attempt = 0
     while ($attempt -lt 5) {
@@ -382,13 +386,13 @@ try {
         if ($iidDigits.Length -ge 20) {
             $iidGroups = @()
             for ($gi = 0; $gi -lt $iidDigits.Length; $gi += 6) { $iidGroups += $iidDigits.Substring($gi, [Math]::Min(6, $iidDigits.Length - $gi)) }
-            $iidText = "Installation ID (IID) - copy tung block theo thu tu vao trang cua Microsoft de lay Confirmation ID:`n"
-            for ($gi = 0; $gi -lt $iidGroups.Count; $gi++) { $iidText += "Buoc $($gi + 1): $($iidGroups[$gi])`n" }
-            $iidText += "`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
+            $iidText = "Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID`r`n`r`n"
+            for ($gi = 0; $gi -lt $iidGroups.Count; $gi++) { $iidText += "Buoc $($gi + 1): $($iidGroups[$gi])`r`n" }
+            $iidText += "`r`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
             try { Set-Clipboard ($iidGroups -join ' ') } catch { }
             try { if (Test-Path $WorkDir) { Set-Content (Join-Path $WorkDir 'IID.txt') $iidText -Force -Encoding UTF8 } } catch { }
             try { $desk = Join-Path $env:USERPROFILE 'Desktop'; if (Test-Path $desk) { Set-Content (Join-Path $desk 'ActWin-IID.txt') $iidText -Force -Encoding UTF8 } } catch { }
-            $iidResult = Show-TextForm2 'ActWin - Installation ID' 'Copy IID theo tung buoc 1, 2, 3... vao trang cua Microsoft, lay Confirmation ID (CID) roi bam OK de nhap CID:' $iidText $true
+            $iidResult = Show-TextForm2 'ActWin - Installation ID' 'Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID (CID) roi bam OK de nhap CID:' $iidText $true
             if ($null -ne $iidResult) {
                 $attempt = 0
                 while ($attempt -lt 5 -and -not $ok) {
