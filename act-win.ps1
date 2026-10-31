@@ -55,6 +55,10 @@ vui long doi..." dialog in both inline and phase 2, with console
 progress lines, and close it before the success dialog. The phone
 success dialog is now 3 lines with CRLF: success line, CID line,
 then the last-5 match line, in both inline and phase 2.
+IID progress line 2026-10-31: before slmgr /dti in both inline and
+phase 2, print "Dang lay Installation ID (IID), vui long doi..." to
+the console, so the user knows the script is still running while
+the IID board is being prepared.
 Choice 1 flow: key prompt -> if already Pro, activate now -> otherwise
 create a logon task for phase 2, upgrade the edition with Microsoft's
 public generic Pro upgrade key, Windows reboots itself, phase 2 installs the user's key
@@ -287,6 +291,7 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput) {
     $errText = $ErrorOutput
     if ($errText.Length -gt 1500) { $errText = $errText.Substring(0, 1500) }
     Show-Info "Kich hoat online khong thanh cong. Loi tu he thong:`n$errText`nBay gio se chuyen sang kich hoat bang dien thoai (phone activation)." 'ActWin - Chua kich hoat online'
+    Write-Host 'Dang lay Installation ID (IID), vui long doi...'
     $dtiOut = Invoke-Slmgr @('/dti')
     $dtiLine = ($dtiOut -split "`n") | Where-Object { $_ -match 'Installation ID' } | Select-Object -First 1
     if (-not $dtiLine) { $dtiLine = $dtiOut }
@@ -489,6 +494,7 @@ try {
         $errText = "$o1`n$o2"
         if ($errText.Length -gt 1500) { $errText = $errText.Substring(0, 1500) }
         Show-Info2 "Kich hoat online khong thanh cong. Loi tu he thong:`n$errText`nBay gio se chuyen sang kich hoat bang dien thoai (phone activation)." 'ActWin - Chua kich hoat online'
+        Write-Host 'Dang lay Installation ID (IID), vui long doi...'
         $dtiOut = (& cscript.exe //Nologo $slmgr /dti 2>&1 | Out-String)
         $dtiLine = ($dtiOut -split "`n") | Where-Object { $_ -match 'Installation ID' } | Select-Object -First 1
         if (-not $dtiLine) { $dtiLine = $dtiOut }
