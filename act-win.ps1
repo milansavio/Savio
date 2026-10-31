@@ -43,6 +43,12 @@ line, then the single-line copy-all form, in both inline and phase 2.
 IID step size 2026-10-31: 1 step = 7 characters, not 6. A 63-digit IID
 therefore gives 9 steps, matching the aka.ms/aoh page, not 11 steps
 of 6 plus a 3-digit remainder.
+TopMost dialogs 2026-10-31: the key InputBox was hidden behind the
+PowerShell console, so all dialogs are now TopMost with BringToFront
+and Activate. The key prompt is a custom TopMost form, not InputBox,
+and Show-Info in main, phase 2 and cleanup is a TopMost form, not
+MessageBox, which has no TopMost guarantee. Show-TextForm in both
+places and the activating notice are also TopMost.
 Choice 1 flow: key prompt -> if already Pro, activate now -> otherwise
 create a logon task for phase 2, upgrade the edition with Microsoft's
 public generic Pro upgrade key, Windows reboots itself, phase 2 installs the user's key
@@ -72,19 +78,77 @@ Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction SilentlyContinue
 
 function Show-Info($Text, $Title = 'ActWin') {
-    try { [System.Windows.Forms.MessageBox]::Show($Text, $Title) | Out-Null }
-    catch { Write-Host $Text }
+    try {
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = $Title
+        $form.Size = New-Object System.Drawing.Size(640, 400)
+        $form.StartPosition = 'CenterScreen'
+        $form.TopMost = $true
+        $box = New-Object System.Windows.Forms.TextBox
+        $box.Multiline = $true
+        $box.ScrollBars = 'Vertical'
+        $box.ReadOnly = $true
+        $box.Text = $Text
+        $box.Location = New-Object System.Drawing.Point(10, 10)
+        $box.Size = New-Object System.Drawing.Size(600, 300)
+        $okBtn = New-Object System.Windows.Forms.Button
+        $okBtn.Text = 'OK'
+        $okBtn.Location = New-Object System.Drawing.Point(525, 325)
+        $okBtn.Size = New-Object System.Drawing.Size(75, 30)
+        $okBtn.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Controls.AddRange(@($box, $okBtn))
+        $form.AcceptButton = $okBtn
+        $form.BringToFront()
+        $form.Activate()
+        [void]$form.ShowDialog()
+    } catch { Write-Host $Text }
 }
 function Test-IsAdmin {
     $id = [Security.Principal.WindowsIdentity]::GetCurrent()
     $p = New-Object Security.Principal.WindowsPrincipal($id)
     return $p.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 }
+function Get-ProKeyForm {
+    try {
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = 'ActWin - Nhap key Pro'
+        $form.Size = New-Object System.Drawing.Size(560, 180)
+        $form.StartPosition = 'CenterScreen'
+        $form.TopMost = $true
+        $label = New-Object System.Windows.Forms.Label
+        $label.Text = 'Nhap key Windows Pro cua ban (5 nhom x 5 ky tu):'
+        $label.AutoSize = $false
+        $label.Location = New-Object System.Drawing.Point(10, 15)
+        $label.Size = New-Object System.Drawing.Size(520, 30)
+        $box = New-Object System.Windows.Forms.TextBox
+        $box.Location = New-Object System.Drawing.Point(10, 50)
+        $box.Size = New-Object System.Drawing.Size(520, 25)
+        $okBtn = New-Object System.Windows.Forms.Button
+        $okBtn.Text = 'OK'
+        $okBtn.Location = New-Object System.Drawing.Point(370, 95)
+        $okBtn.Size = New-Object System.Drawing.Size(75, 30)
+        $okBtn.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $cancelBtn = New-Object System.Windows.Forms.Button
+        $cancelBtn.Text = 'Cancel'
+        $cancelBtn.Location = New-Object System.Drawing.Point(455, 95)
+        $cancelBtn.Size = New-Object System.Drawing.Size(75, 30)
+        $cancelBtn.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $form.Controls.AddRange(@($label, $box, $okBtn, $cancelBtn))
+        $form.AcceptButton = $okBtn
+        $form.CancelButton = $cancelBtn
+        $form.BringToFront()
+        $form.Activate()
+        if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $box.Text } else { return $null }
+    } catch {
+        try { return [Microsoft.VisualBasic.Interaction]::InputBox('Nhap key Windows Pro cua ban (5 nhom x 5 ky tu):', 'ActWin - Nhap key Pro', '') } catch { return $null }
+    }
+}
 function Get-ProKey {
     while ($true) {
         $input = $null
-        try { $input = [Microsoft.VisualBasic.Interaction]::InputBox('Nhap key Windows Pro cua ban (5 nhom x 5 ky tu):', 'ActWin - Nhap key Pro', '') }
-        catch { $input = Read-Host 'Nhap key Windows Pro (5 nhom x 5 ky tu)' }
+        try { $input = Get-ProKeyForm }
+        catch { $input = $null }
+        if ($null -eq $input) { return $null }
         if ([string]::IsNullOrWhiteSpace($input)) { return $null }
         $key = $input.Trim().ToUpper() -replace '\s+', ''
         if ($key -match '^[A-Z0-9]{5}(-[A-Z0-9]{5}){4}$') { return $key }
@@ -134,6 +198,8 @@ function Start-ActivatingNotice {
             '$timer.Interval = 180000',
             '$timer.Add_Tick({ $form.Close() })',
             '$timer.Start()',
+            '$form.BringToFront()',
+            '$form.Activate()',
             '[void]$form.ShowDialog()'
         )
         $noticeCode = ($noticeLines -join "`n")
@@ -178,6 +244,7 @@ function Show-TextForm($Title, $Prompt, $InitialText, $ReadOnly) {
         $form.Text = $Title
         $form.Size = New-Object System.Drawing.Size(640, 430)
         $form.StartPosition = 'CenterScreen'
+        $form.TopMost = $true
         $label = New-Object System.Windows.Forms.Label
         $label.Text = $Prompt
         $label.AutoSize = $false
@@ -203,6 +270,8 @@ function Show-TextForm($Title, $Prompt, $InitialText, $ReadOnly) {
         $form.Controls.AddRange(@($label, $box, $okBtn, $cancelBtn))
         $form.AcceptButton = $okBtn
         $form.CancelButton = $cancelBtn
+        $form.BringToFront()
+        $form.Activate()
         if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $box.Text } else { return $null }
     } catch {
         try { return [Microsoft.VisualBasic.Interaction]::InputBox($Prompt, $Title, $InitialText) } catch { return $null }
@@ -275,8 +344,30 @@ $KeyFile = '__KEYFILE__'
 $Phase2File = '__PHASE2FILE__'
 $WorkDir = '__WORKDIR__'
 function Show-Info2($Text, $Title = 'ActWin') {
-    try { [System.Windows.Forms.MessageBox]::Show($Text, $Title) | Out-Null }
-    catch { Write-Host $Text }
+    try {
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = $Title
+        $form.Size = New-Object System.Drawing.Size(640, 400)
+        $form.StartPosition = 'CenterScreen'
+        $form.TopMost = $true
+        $box = New-Object System.Windows.Forms.TextBox
+        $box.Multiline = $true
+        $box.ScrollBars = 'Vertical'
+        $box.ReadOnly = $true
+        $box.Text = $Text
+        $box.Location = New-Object System.Drawing.Point(10, 10)
+        $box.Size = New-Object System.Drawing.Size(600, 300)
+        $okBtn = New-Object System.Windows.Forms.Button
+        $okBtn.Text = 'OK'
+        $okBtn.Location = New-Object System.Drawing.Point(525, 325)
+        $okBtn.Size = New-Object System.Drawing.Size(75, 30)
+        $okBtn.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Controls.AddRange(@($box, $okBtn))
+        $form.AcceptButton = $okBtn
+        $form.BringToFront()
+        $form.Activate()
+        [void]$form.ShowDialog()
+    } catch { Write-Host $Text }
 }
 function Show-TextForm2($Title, $Prompt, $InitialText, $ReadOnly) {
     try {
@@ -284,6 +375,7 @@ function Show-TextForm2($Title, $Prompt, $InitialText, $ReadOnly) {
         $form.Text = $Title
         $form.Size = New-Object System.Drawing.Size(640, 430)
         $form.StartPosition = 'CenterScreen'
+        $form.TopMost = $true
         $label = New-Object System.Windows.Forms.Label
         $label.Text = $Prompt
         $label.AutoSize = $false
@@ -309,6 +401,8 @@ function Show-TextForm2($Title, $Prompt, $InitialText, $ReadOnly) {
         $form.Controls.AddRange(@($label, $box, $okBtn, $cancelBtn))
         $form.AcceptButton = $okBtn
         $form.CancelButton = $cancelBtn
+        $form.BringToFront()
+        $form.Activate()
         if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $box.Text } else { return $null }
     } catch {
         try { return [Microsoft.VisualBasic.Interaction]::InputBox($Prompt, $Title, $InitialText) } catch { return $null }
@@ -333,6 +427,8 @@ function Start-Notice2 {
             '$timer.Interval = 180000',
             '$timer.Add_Tick({ $form.Close() })',
             '$timer.Start()',
+            '$form.BringToFront()',
+            '$form.Activate()',
             '[void]$form.ShowDialog()'
         )
         $nCode = "Add-Type -AssemblyName System.Windows.Forms`nAdd-Type -AssemblyName System.Drawing`n" + ($nLines -join "`n")
@@ -453,8 +549,30 @@ $CTask = '__CTASK__'
 $CFile = '__CFILE__'
 $CWorkDir = '__CWORKDIR__'
 function Show-InfoC($Text, $Title = 'ActWin') {
-    try { [System.Windows.Forms.MessageBox]::Show($Text, $Title) | Out-Null }
-    catch { Write-Host $Text }
+    try {
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = $Title
+        $form.Size = New-Object System.Drawing.Size(640, 400)
+        $form.StartPosition = 'CenterScreen'
+        $form.TopMost = $true
+        $box = New-Object System.Windows.Forms.TextBox
+        $box.Multiline = $true
+        $box.ScrollBars = 'Vertical'
+        $box.ReadOnly = $true
+        $box.Text = $Text
+        $box.Location = New-Object System.Drawing.Point(10, 10)
+        $box.Size = New-Object System.Drawing.Size(600, 300)
+        $okBtn = New-Object System.Windows.Forms.Button
+        $okBtn.Text = 'OK'
+        $okBtn.Location = New-Object System.Drawing.Point(525, 325)
+        $okBtn.Size = New-Object System.Drawing.Size(75, 30)
+        $okBtn.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $form.Controls.AddRange(@($box, $okBtn))
+        $form.AcceptButton = $okBtn
+        $form.BringToFront()
+        $form.Activate()
+        [void]$form.ShowDialog()
+    } catch { Write-Host $Text }
 }
 try {
     $editionC = ''
