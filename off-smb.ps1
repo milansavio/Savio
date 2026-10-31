@@ -36,7 +36,6 @@ try {
     $Host.UI.RawUI.ForegroundColor = [ConsoleColor]::Black
     Clear-Host
 } catch { }
-Write-Host 'off-smb - ban 2026-10-31-exit2: bam phim cuoi se dong PowerShell luon.'
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
