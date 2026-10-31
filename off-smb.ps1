@@ -68,6 +68,42 @@ try {
     Write-Host "Buoc 3 loi: $($_.Exception.Message)"
 }
 
+# Buoc toi uu bo sung tu snippet OPTIMIZE_SMB, chi lay phan khong xung dot:
+#   - MaxCmds = 65535 va MaxThreads = 1000 cho LanmanWorkstation: tang so
+#     lenh / luong dong thoi, giup chuyen nhieu file, file lon tren LAN nhanh
+#     va do nghe hon, chu khong phai de mo khoa truy cap.
+#   - SMB2 = 1 cho LanmanServer: dam bao may nay chia se file ra LAN bang
+#     SMB2 hien dai (mac dinh von da bat).
+#   - Khoi dong lai LanmanWorkstation dung thu tu: dung dich vu, ghi cac
+#     gia tri LanmanWorkstation, roi moi khoi dong lai, de cac gia tri moi
+#     co hieu luc ngay, thay vi ghi sau khi da khoi dong nhu snippet goc.
+# KHONG bo sung 2 cai sau, vi chung nguoc voi muc dich cua off-smb:
+#   - AllowInsecureGuestAuth = 0: tat guest logon, se pha vo buoc 3 vua bat
+#     guest o tren, lam NAS khach khong vao duoc nua.
+#   - SMB1 = 0: tat SMB1, tot cho bao mat va von la mac dinh tren 24H2,
+#     nhung se pha vo thiet bi cu chi noi duoc SMB1, nen khong ep buoc.
+Write-Host 'Buoc toi uu: dung LanmanWorkstation de ghi MaxCmds / MaxThreads...'
+try {
+    Stop-Service -Name 'LanmanWorkstation' -Force -ErrorAction Stop
+    Write-Host '  Da dung LanmanWorkstation.'
+} catch {
+    Write-Host "  Khong dung duoc LanmanWorkstation (co the dang co ket noi SMB mo): $($_.Exception.Message)"
+}
+try {
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters' -Name 'MaxCmds' -Value 65535 -Type DWord -Force -ErrorAction Stop
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters' -Name 'MaxThreads' -Value 1000 -Type DWord -Force -ErrorAction Stop
+    Set-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -Name 'SMB2' -Value 1 -Type DWord -Force -ErrorAction Stop
+    Write-Host '  Da ghi MaxCmds = 65535, MaxThreads = 1000, SMB2 = 1.'
+} catch {
+    Write-Host "  Ghi gia tri toi uu loi: $($_.Exception.Message)"
+}
+try {
+    Start-Service -Name 'LanmanWorkstation' -ErrorAction Stop
+    Write-Host '  Da khoi dong lai LanmanWorkstation.'
+} catch {
+    Write-Host "  Khong khoi dong lai duoc LanmanWorkstation: $($_.Exception.Message)"
+}
+
 Write-Host ''
 Write-Host 'Kiem tra lai gia tri hien tai (chi doc, khong thay doi gi):'
 try {
@@ -82,6 +118,14 @@ try {
     Write-Host "  SmbClient EnableInsecureGuestLogons = $($cfg.EnableInsecureGuestLogons)"
 } catch {
     Write-Host "  Khong doc duoc SmbClientConfiguration: $($_.Exception.Message)"
+}
+try {
+    $ws = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanWorkstation\Parameters' -ErrorAction Stop
+    Write-Host "  LanmanWorkstation MaxCmds = $($ws.MaxCmds), MaxThreads = $($ws.MaxThreads)"
+    $srv = Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Services\LanmanServer\Parameters' -ErrorAction Stop
+    Write-Host "  LanmanServer SMB2 = $($srv.SMB2)"
+} catch {
+    Write-Host "  Khong doc duoc gia tri toi uu: $($_.Exception.Message)"
 }
 Write-Host ''
 Write-Host 'Xong. Hay thu ket noi lai thu muc SMB. Neu van khong duoc, khoi dong lai may roi thu lai.'
