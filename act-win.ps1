@@ -27,6 +27,10 @@ a Desktop file, then show a CID entry form that accepts a pasted
 whole CID, strips non-digits and splits it into groups of 6, runs
 slmgr /atp, re-checks Licensed plus last-5, and shows success on a
 match. Cleanup in the finally block still runs after phone flow.
+Phone activation for already-Pro machines 2026-10-31: the same phone
+flow is also used when choice 1 runs inline on an already-Pro machine
+and online activation fails, so a Pro machine does not stop at the
+online error either.
 Choice 1 flow: key prompt -> if already Pro, activate now -> otherwise
 create a logon task for phase 2, upgrade the edition with Microsoft's
 public generic Pro upgrade key, Windows reboots itself, phase 2 installs the user's key
@@ -52,6 +56,7 @@ $GenericProKey = 'VK7JG-NPHTM-C97JM-9MPGT-3V66T'
 $RawUrl = 'https://raw.githubusercontent.com/milansavio/Savio/main/act-win.ps1'
 
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 Add-Type -AssemblyName Microsoft.VisualBasic -ErrorAction SilentlyContinue
 
 function Show-Info($Text, $Title = 'ActWin') {
@@ -111,6 +116,95 @@ function Invoke-ActivateAndCheck($Key, $Last5) {
     }
     if (Test-Activated $Last5) { return @{ Ok = $true; Output = $out2 } }
     return @{ Ok = $false; Output = ($out1 + "`n" + $out2) }
+}
+function Show-TextForm($Title, $Prompt, $InitialText, $ReadOnly) {
+    try {
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = $Title
+        $form.Size = New-Object System.Drawing.Size(640, 430)
+        $form.StartPosition = 'CenterScreen'
+        $label = New-Object System.Windows.Forms.Label
+        $label.Text = $Prompt
+        $label.AutoSize = $false
+        $label.Location = New-Object System.Drawing.Point(10, 10)
+        $label.Size = New-Object System.Drawing.Size(600, 40)
+        $box = New-Object System.Windows.Forms.TextBox
+        $box.Multiline = $true
+        $box.ScrollBars = 'Vertical'
+        $box.ReadOnly = $ReadOnly
+        $box.Text = $InitialText
+        $box.Location = New-Object System.Drawing.Point(10, 55)
+        $box.Size = New-Object System.Drawing.Size(600, 285)
+        $okBtn = New-Object System.Windows.Forms.Button
+        $okBtn.Text = 'OK'
+        $okBtn.Location = New-Object System.Drawing.Point(450, 355)
+        $okBtn.Size = New-Object System.Drawing.Size(75, 30)
+        $okBtn.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $cancelBtn = New-Object System.Windows.Forms.Button
+        $cancelBtn.Text = 'Huy'
+        $cancelBtn.Location = New-Object System.Drawing.Point(535, 355)
+        $cancelBtn.Size = New-Object System.Drawing.Size(75, 30)
+        $cancelBtn.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $form.Controls.AddRange(@($label, $box, $okBtn, $cancelBtn))
+        $form.AcceptButton = $okBtn
+        $form.CancelButton = $cancelBtn
+        if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $box.Text } else { return $null }
+    } catch {
+        try { return [Microsoft.VisualBasic.Interaction]::InputBox($Prompt, $Title, $InitialText) } catch { return $null }
+    }
+}
+function Invoke-PhoneActivation($Last5, $ErrorOutput) {
+    $errText = $ErrorOutput
+    if ($errText.Length -gt 1500) { $errText = $errText.Substring(0, 1500) }
+    Show-Info "Kich hoat online khong thanh cong. Loi tu he thong:`n$errText`nBay gio se chuyen sang kich hoat bang dien thoai (phone activation)." 'ActWin - Chua kich hoat online'
+    $dtiOut = Invoke-Slmgr @('/dti')
+    $dtiLine = ($dtiOut -split "`n") | Where-Object { $_ -match 'Installation ID' } | Select-Object -First 1
+    if (-not $dtiLine) { $dtiLine = $dtiOut }
+    $iidDigits = ($dtiLine -replace '[^0-9]', '')
+    if ($iidDigits.Length -lt 20) { $iidDigits = ($dtiOut -replace '[^0-9]', '') }
+    if ($iidDigits.Length -lt 20) {
+        Show-Info "Khong lay duoc Installation ID tu he thong. Loi online truoc do:`n$errText" 'ActWin - Khong lay duoc IID'
+        return $false
+    }
+    $iidGroups = @()
+    for ($gi = 0; $gi -lt $iidDigits.Length; $gi += 6) { $iidGroups += $iidDigits.Substring($gi, [Math]::Min(6, $iidDigits.Length - $gi)) }
+    $iidText = "Installation ID (IID) - copy tung block theo thu tu vao trang cua Microsoft de lay Confirmation ID:`n"
+    for ($gi = 0; $gi -lt $iidGroups.Count; $gi++) { $iidText += "Buoc $($gi + 1): $($iidGroups[$gi])`n" }
+    $iidText += "`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
+    try { Set-Clipboard ($iidGroups -join ' ') } catch { }
+    try { $desk = Join-Path $env:USERPROFILE 'Desktop'; if (Test-Path $desk) { Set-Content (Join-Path $desk 'ActWin-IID.txt') $iidText -Force -Encoding UTF8 } } catch { }
+    try { Set-Content (Join-Path $env:TEMP 'ActWin-IID.txt') $iidText -Force -Encoding UTF8 } catch { }
+    $iidResult = Show-TextForm 'ActWin - Installation ID' 'Copy IID theo tung buoc 1, 2, 3... vao trang cua Microsoft, lay Confirmation ID (CID) roi bam OK de nhap CID:' $iidText $true
+    if ($null -eq $iidResult) { return $false }
+    $attempt = 0
+    while ($attempt -lt 5) {
+        $attempt++
+        $cidInput = Show-TextForm 'ActWin - Nhap Confirmation ID (CID)' 'Paste toan bo CID vao day (co the co khoang trang, gach ngang, xuong dong). Script se tu bo ky tu thua va tu chia lai thanh tung nhom 6 chu so:' '' $false
+        if ($null -eq $cidInput) { return $false }
+        $cidDigits = ($cidInput -replace '[^0-9]', '')
+        if ($cidDigits.Length -lt 40) {
+            Show-Info "CID vua nhap chi co $($cidDigits.Length) chu so, thuong la 48 chu so. Hay kiem tra lai va nhap lai." 'ActWin - CID chua hop le'
+            continue
+        }
+        $cidGroups = @()
+        for ($ci = 0; $ci -lt $cidDigits.Length; $ci += 6) { $cidGroups += $cidDigits.Substring($ci, [Math]::Min(6, $cidDigits.Length - $ci)) }
+        $atpOut = Invoke-Slmgr @('/atp', $cidDigits)
+        $phoneDeadline = (Get-Date).AddSeconds(30)
+        $phoneOk = $false
+        while ((Get-Date) -lt $phoneDeadline) {
+            if (Test-Activated $Last5) { $phoneOk = $true; break }
+            Start-Sleep -Seconds 5
+        }
+        if ($phoneOk) {
+            Show-Info "Da kich hoat thanh cong Windows Pro bang Confirmation ID. CID da chia: $($cidGroups -join ' '). 5 ky tu cuoi trung voi key ban da nhap: $Last5" 'ActWin - Thanh cong'
+            return $true
+        }
+        $atpText = $atpOut
+        if ($atpText.Length -gt 1200) { $atpText = $atpText.Substring(0, 1200) }
+        Show-Info "Kich hoat bang CID chua thanh cong. Loi tu he thong:`n$atpText`nHay kiem tra lai CID va nhap lai." 'ActWin - CID chua thanh cong'
+    }
+    Show-Info 'Da dung kich hoat bang dien thoai. May van la Pro nhung chua kich hoat, hay chay lai act-win.ps1 khi co CID dung.' 'ActWin - Chua kich hoat'
+    return $false
 }
 function Remove-Phase2Artifacts {
     try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
@@ -338,7 +432,9 @@ if ($isPro) {
     if ($result.Ok) {
         Show-Info "Da kich hoat thanh cong Windows Pro. 5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
     } else {
-        Show-Info "Chua kich hoat duoc bang key ban da nhap. Loi tu he thong:`n$($result.Output)`nHay kiem tra lai key roi chay lai." 'ActWin - Chua kich hoat'
+        # Already-Pro machine: same phone flow as phase 2, instead of
+        # stopping at the online error.
+        Invoke-PhoneActivation $last5 $result.Output | Out-Null
     }
     exit
 }
