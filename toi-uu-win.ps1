@@ -22,7 +22,8 @@
 # Important differences from the .bat, on purpose:
 #   - The .bat only exits with a message if it is not run as Administrator.
 #     This script re-launches itself as Administrator via UAC instead.
-#   - Console is green text on black, like the .bat color 0A.
+#   - Console is black text on white background, per user request,
+#     instead of the .bat color 0A (green on black).
 #   - Browser cache: the .bat deletes the whole Firefox Profiles folder
 #     contents, which would destroy profiles, bookmarks and logins, not just
 #     cache. This script cleans only cache folders inside each Firefox
@@ -37,8 +38,8 @@
 #     reports a download failure instead of silently continuing.
 
 try {
-    $Host.UI.RawUI.BackgroundColor = [ConsoleColor]::Black
-    $Host.UI.RawUI.ForegroundColor = [ConsoleColor]::Green
+    $Host.UI.RawUI.BackgroundColor = [ConsoleColor]::White
+    $Host.UI.RawUI.ForegroundColor = [ConsoleColor]::Black
     $Host.UI.RawUI.WindowTitle = 'DON DEP & TOI UU HE THONG - BIMASTER JSC'
     Clear-Host
 } catch { }
