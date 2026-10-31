@@ -49,6 +49,12 @@ and Activate. The key prompt is a custom TopMost form, not InputBox,
 and Show-Info in main, phase 2 and cleanup is a TopMost form, not
 MessageBox, which has no TopMost guarantee. Show-TextForm in both
 places and the activating notice are also TopMost.
+Phone notice and success layout 2026-10-31: during phone activation,
+after slmgr /atp, show a non-modal TopMost "Dang kich hoat qua Phone,
+vui long doi..." dialog in both inline and phase 2, with console
+progress lines, and close it before the success dialog. The phone
+success dialog is now 3 lines with CRLF: success line, CID line,
+then the last-5 match line, in both inline and phase 2.
 Choice 1 flow: key prompt -> if already Pro, activate now -> otherwise
 create a logon task for phase 2, upgrade the edition with Microsoft's
 public generic Pro upgrade key, Windows reboots itself, phase 2 installs the user's key
@@ -179,7 +185,7 @@ function Invoke-Slmgr($Arguments) {
     $slmgr = Join-Path $env:SystemRoot 'System32\slmgr.vbs'
     return (& cscript.exe //Nologo $slmgr @Arguments 2>&1 | Out-String)
 }
-function Start-ActivatingNotice {
+function Start-ActivatingNotice($NoticeText = 'Dang kich hoat, vui long doi...') {
     try {
         $noticeLines = @(
             '$form = New-Object System.Windows.Forms.Form',
@@ -188,7 +194,7 @@ function Start-ActivatingNotice {
             '$form.StartPosition = "CenterScreen"',
             '$form.TopMost = $true',
             '$label = New-Object System.Windows.Forms.Label',
-            '$label.Text = "Dang kich hoat, vui long doi..."',
+            ('$label.Text = "' + $NoticeText + '"'),
             '$label.AutoSize = $false',
             '$label.Location = New-Object System.Drawing.Point(20, 40)',
             '$label.Size = New-Object System.Drawing.Size(360, 60)',
@@ -313,14 +319,20 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput) {
         $cidGroups = @()
         for ($ci = 0; $ci -lt $cidDigits.Length; $ci += 6) { $cidGroups += $cidDigits.Substring($ci, [Math]::Min(6, $cidDigits.Length - $ci)) }
         $atpOut = Invoke-Slmgr @('/atp', $cidDigits)
+        Write-Host 'Dang kich hoat qua Phone, vui long doi...'
+        $phoneNotice = Start-ActivatingNotice 'Dang kich hoat qua Phone, vui long doi...'
         $phoneDeadline = (Get-Date).AddSeconds(30)
         $phoneOk = $false
+        $phoneCheck = 0
         while ((Get-Date) -lt $phoneDeadline) {
+            $phoneCheck++
+            Write-Host "Dang kiem tra kich hoat qua Phone, vui long doi... (lan $phoneCheck)"
             if (Test-Activated $Last5) { $phoneOk = $true; break }
             Start-Sleep -Seconds 5
         }
+        Stop-ActivatingNotice $phoneNotice
         if ($phoneOk) {
-            Show-Info "Da kich hoat thanh cong Windows Pro bang Confirmation ID. CID da chia: $($cidGroups -join ' '). 5 ky tu cuoi trung voi key ban da nhap: $Last5" 'ActWin - Thanh cong'
+            Show-Info "Da kich hoat thanh cong Windows Pro bang Confirmation ID.`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $Last5" 'ActWin - Thanh cong'
             return $true
         }
         $atpText = $atpOut
@@ -408,7 +420,7 @@ function Show-TextForm2($Title, $Prompt, $InitialText, $ReadOnly) {
         try { return [Microsoft.VisualBasic.Interaction]::InputBox($Prompt, $Title, $InitialText) } catch { return $null }
     }
 }
-function Start-Notice2 {
+function Start-Notice2($NoticeText = 'Dang kich hoat, vui long doi...') {
     try {
         $nLines = @(
             '$form = New-Object System.Windows.Forms.Form',
@@ -417,7 +429,7 @@ function Start-Notice2 {
             '$form.StartPosition = "CenterScreen"',
             '$form.TopMost = $true',
             '$label = New-Object System.Windows.Forms.Label',
-            '$label.Text = "Dang kich hoat, vui long doi..."',
+            ('$label.Text = "' + $NoticeText + '"'),
             '$label.AutoSize = $false',
             '$label.Location = New-Object System.Drawing.Point(20, 40)',
             '$label.Size = New-Object System.Drawing.Size(360, 60)',
@@ -506,6 +518,8 @@ try {
                     $cidGroups = @()
                     for ($ci = 0; $ci -lt $cidDigits.Length; $ci += 6) { $cidGroups += $cidDigits.Substring($ci, [Math]::Min(6, $cidDigits.Length - $ci)) }
                     $atpOut = (& cscript.exe //Nologo $slmgr /atp $cidDigits 2>&1 | Out-String)
+                    Write-Host 'Dang kich hoat qua Phone, vui long doi...'
+                    $noticePhone = Start-Notice2 'Dang kich hoat qua Phone, vui long doi...'
                     $phoneDeadline = (Get-Date).AddSeconds(30)
                     while ((Get-Date) -lt $phoneDeadline) {
                         $prods2 = Get-CimInstance -ClassName SoftwareLicensingProduct -ErrorAction SilentlyContinue |
@@ -514,8 +528,9 @@ try {
                         if ($ok) { break }
                         Start-Sleep -Seconds 5
                     }
+                    Stop-Notice2 $noticePhone
                     if ($ok) {
-                        Show-Info2 "Da kich hoat thanh cong Windows Pro bang Confirmation ID. CID da chia: $($cidGroups -join ' '). 5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
+                        Show-Info2 "Da kich hoat thanh cong Windows Pro bang Confirmation ID.`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
                     } else {
                         $atpText = $atpOut
                         if ($atpText.Length -gt 1200) { $atpText = $atpText.Substring(0, 1200) }
