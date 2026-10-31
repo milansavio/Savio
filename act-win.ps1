@@ -31,6 +31,11 @@ Phone activation for already-Pro machines 2026-10-31: the same phone
 flow is also used when choice 1 runs inline on an already-Pro machine
 and online activation fails, so a Pro machine does not stop at the
 online error either.
+Activating notice 2026-10-31: during online activation, show a
+non-modal "Dang kich hoat, vui long doi..." dialog in a separate
+process plus console progress lines, and close the dialog when the
+check finishes, so the user knows the script is still running. The
+dialog auto-closes after 180 seconds as a safety net.
 Choice 1 flow: key prompt -> if already Pro, activate now -> otherwise
 create a logon task for phase 2, upgrade the edition with Microsoft's
 public generic Pro upgrade key, Windows reboots itself, phase 2 installs the user's key
@@ -103,19 +108,62 @@ function Invoke-Slmgr($Arguments) {
     $slmgr = Join-Path $env:SystemRoot 'System32\slmgr.vbs'
     return (& cscript.exe //Nologo $slmgr @Arguments 2>&1 | Out-String)
 }
+function Start-ActivatingNotice {
+    try {
+        $noticeLines = @(
+            '$form = New-Object System.Windows.Forms.Form',
+            '$form.Text = "ActWin"',
+            '$form.Size = New-Object System.Drawing.Size(420, 150)',
+            '$form.StartPosition = "CenterScreen"',
+            '$form.TopMost = $true',
+            '$label = New-Object System.Windows.Forms.Label',
+            '$label.Text = "Dang kich hoat, vui long doi..."',
+            '$label.AutoSize = $false',
+            '$label.Location = New-Object System.Drawing.Point(20, 40)',
+            '$label.Size = New-Object System.Drawing.Size(360, 60)',
+            '$label.Font = New-Object System.Drawing.Font("Segoe UI", 12)',
+            '$form.Controls.Add($label)',
+            '$timer = New-Object System.Windows.Forms.Timer',
+            '$timer.Interval = 180000',
+            '$timer.Add_Tick({ $form.Close() })',
+            '$timer.Start()',
+            '[void]$form.ShowDialog()'
+        )
+        $noticeCode = ($noticeLines -join "`n")
+        $noticeCode = "Add-Type -AssemblyName System.Windows.Forms`nAdd-Type -AssemblyName System.Drawing`n" + $noticeCode
+        $noticeBytes = [System.Text.Encoding]::Unicode.GetBytes($noticeCode)
+        $noticeEncoded = [Convert]::ToBase64String($noticeBytes)
+        return (Start-Process powershell.exe -PassThru -ArgumentList '-NoProfile', '-EncodedCommand', $noticeEncoded -ErrorAction Stop)
+    } catch { return $null }
+}
+function Stop-ActivatingNotice($Proc) {
+    try { if ($Proc -and -not $Proc.HasExited) { Stop-Process -Id $Proc.Id -Force -ErrorAction SilentlyContinue } } catch { }
+}
 
 function Invoke-ActivateAndCheck($Key, $Last5) {
-    $out1 = Invoke-Slmgr @('/ipk', $Key)
-    $out2 = Invoke-Slmgr @('/ato')
-    $deadline = (Get-Date).AddSeconds(30)
-    $triedAgain = $false
-    while ((Get-Date) -lt $deadline) {
+    Write-Host 'Dang kich hoat online, vui long doi...'
+    try { $Host.UI.RawUI.WindowTitle = 'ActWin - Dang kich hoat, vui long doi...' } catch { }
+    $noticeProc = Start-ActivatingNotice
+    try {
+        $out1 = Invoke-Slmgr @('/ipk', $Key)
+        Write-Host 'Da nhap key, dang kich hoat online...'
+        $out2 = Invoke-Slmgr @('/ato')
+        $deadline = (Get-Date).AddSeconds(30)
+        $triedAgain = $false
+        $checkCount = 0
+        while ((Get-Date) -lt $deadline) {
+            $checkCount++
+            Write-Host "Dang kiem tra kich hoat, vui long doi... (lan $checkCount)"
+            if (Test-Activated $Last5) { return @{ Ok = $true; Output = $out2 } }
+            Start-Sleep -Seconds 5
+            if (-not $triedAgain) { $out2 = Invoke-Slmgr @('/ato'); $triedAgain = $true }
+        }
         if (Test-Activated $Last5) { return @{ Ok = $true; Output = $out2 } }
-        Start-Sleep -Seconds 5
-        if (-not $triedAgain) { $out2 = Invoke-Slmgr @('/ato'); $triedAgain = $true }
+        return @{ Ok = $false; Output = ($out1 + "`n" + $out2) }
+    } finally {
+        Stop-ActivatingNotice $noticeProc
+        try { $Host.UI.RawUI.WindowTitle = 'ActWin' } catch { }
     }
-    if (Test-Activated $Last5) { return @{ Ok = $true; Output = $out2 } }
-    return @{ Ok = $false; Output = ($out1 + "`n" + $out2) }
 }
 function Show-TextForm($Title, $Prompt, $InitialText, $ReadOnly) {
     try {
@@ -259,6 +307,36 @@ function Show-TextForm2($Title, $Prompt, $InitialText, $ReadOnly) {
         try { return [Microsoft.VisualBasic.Interaction]::InputBox($Prompt, $Title, $InitialText) } catch { return $null }
     }
 }
+function Start-Notice2 {
+    try {
+        $nLines = @(
+            '$form = New-Object System.Windows.Forms.Form',
+            '$form.Text = "ActWin"',
+            '$form.Size = New-Object System.Drawing.Size(420, 150)',
+            '$form.StartPosition = "CenterScreen"',
+            '$form.TopMost = $true',
+            '$label = New-Object System.Windows.Forms.Label',
+            '$label.Text = "Dang kich hoat, vui long doi..."',
+            '$label.AutoSize = $false',
+            '$label.Location = New-Object System.Drawing.Point(20, 40)',
+            '$label.Size = New-Object System.Drawing.Size(360, 60)',
+            '$label.Font = New-Object System.Drawing.Font("Segoe UI", 12)',
+            '$form.Controls.Add($label)',
+            '$timer = New-Object System.Windows.Forms.Timer',
+            '$timer.Interval = 180000',
+            '$timer.Add_Tick({ $form.Close() })',
+            '$timer.Start()',
+            '[void]$form.ShowDialog()'
+        )
+        $nCode = "Add-Type -AssemblyName System.Windows.Forms`nAdd-Type -AssemblyName System.Drawing`n" + ($nLines -join "`n")
+        $nBytes = [System.Text.Encoding]::Unicode.GetBytes($nCode)
+        $nEncoded = [Convert]::ToBase64String($nBytes)
+        return (Start-Process powershell.exe -PassThru -ArgumentList '-NoProfile', '-EncodedCommand', $nEncoded -ErrorAction Stop)
+    } catch { return $null }
+}
+function Stop-Notice2($Proc) {
+    try { if ($Proc -and -not $Proc.HasExited) { Stop-Process -Id $Proc.Id -Force -ErrorAction SilentlyContinue } } catch { }
+}
 try {
     if (-not (Test-Path $KeyFile)) { throw 'Khong tim thay file key da ma hoa. Hay chay lai act-win.ps1 va nhap key.' }
     $enc = (Get-Content $KeyFile -Raw).Trim()
@@ -270,12 +348,18 @@ try {
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
     $last5 = $key.Substring($key.Length - 5)
     $slmgr = Join-Path $env:SystemRoot 'System32\slmgr.vbs'
+    Write-Host 'Dang kich hoat online, vui long doi...'
+    $noticeProc2 = Start-Notice2
     $o1 = (& cscript.exe //Nologo $slmgr /ipk $key 2>&1 | Out-String)
+    Write-Host 'Da nhap key, dang kich hoat online...'
     $o2 = (& cscript.exe //Nologo $slmgr /ato 2>&1 | Out-String)
     $ok = $false
     $deadline = (Get-Date).AddSeconds(30)
     $again = $false
+    $checkCount2 = 0
     while ((Get-Date) -lt $deadline) {
+        $checkCount2++
+        Write-Host "Dang kiem tra kich hoat, vui long doi... (lan $checkCount2)"
         $prods = Get-CimInstance -ClassName SoftwareLicensingProduct -ErrorAction SilentlyContinue |
             Where-Object { $_.PartialProductKey -and $_.LicenseStatus -eq 1 }
         foreach ($p in $prods) { if ($p.PartialProductKey -eq $last5) { $ok = $true; break } }
@@ -283,6 +367,7 @@ try {
         Start-Sleep -Seconds 5
         if (-not $again) { $o2 = (& cscript.exe //Nologo $slmgr /ato 2>&1 | Out-String); $again = $true }
     }
+    Stop-Notice2 $noticeProc2
     if ($ok) {
         Show-Info2 "Da kich hoat thanh cong Windows Pro. 5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
     } else {
