@@ -36,6 +36,7 @@ try {
     $Host.UI.RawUI.ForegroundColor = [ConsoleColor]::Black
     Clear-Host
 } catch { }
+Write-Host 'off-smb - ban 2026-10-31-exit2: bam phim cuoi se dong PowerShell luon.'
 
 $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
 if (-not $isAdmin) {
@@ -92,4 +93,7 @@ try {
 } catch {
     Read-Host 'Nhan Enter de thoat va dong PowerShell'
 }
-exit
+# Plain exit does not always close the host when the script runs via irm | iex,
+# because iex runs the script in the current session scope. Environment.Exit
+# terminates the PowerShell process itself, so the window really closes.
+[Environment]::Exit(0)
