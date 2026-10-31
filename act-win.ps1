@@ -20,6 +20,13 @@ Fix 2026-10-30: phase 2 DPAPI read. The encrypted key file is written
 with NoNewline and Ascii, and phase 2 reads it with Trim plus a BOM
 trim and an empty check, because a trailing newline caused
 "Input string was not in a correct format" on some machines.
+Phone activation 2026-10-31: in phase 2, if online activation fails,
+show the online error, export the Installation ID (slmgr /dti) in
+groups of 6 in step order in a copyable textbox plus clipboard plus
+a Desktop file, then show a CID entry form that accepts a pasted
+whole CID, strips non-digits and splits it into groups of 6, runs
+slmgr /atp, re-checks Licensed plus last-5, and shows success on a
+match. Cleanup in the finally block still runs after phone flow.
 Choice 1 flow: key prompt -> if already Pro, activate now -> otherwise
 create a logon task for phase 2, upgrade the edition with Microsoft's
 public generic Pro upgrade key, Windows reboots itself, phase 2 installs the user's key
@@ -113,6 +120,7 @@ function Remove-Phase2Artifacts {
 $Phase2Template = @'
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
+Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
 $TaskName = '__TASK__'
 $KeyFile = '__KEYFILE__'
 $Phase2File = '__PHASE2FILE__'
@@ -120,6 +128,42 @@ $WorkDir = '__WORKDIR__'
 function Show-Info2($Text, $Title = 'ActWin') {
     try { [System.Windows.Forms.MessageBox]::Show($Text, $Title) | Out-Null }
     catch { Write-Host $Text }
+}
+function Show-TextForm2($Title, $Prompt, $InitialText, $ReadOnly) {
+    try {
+        $form = New-Object System.Windows.Forms.Form
+        $form.Text = $Title
+        $form.Size = New-Object System.Drawing.Size(640, 430)
+        $form.StartPosition = 'CenterScreen'
+        $label = New-Object System.Windows.Forms.Label
+        $label.Text = $Prompt
+        $label.AutoSize = $false
+        $label.Location = New-Object System.Drawing.Point(10, 10)
+        $label.Size = New-Object System.Drawing.Size(600, 40)
+        $box = New-Object System.Windows.Forms.TextBox
+        $box.Multiline = $true
+        $box.ScrollBars = 'Vertical'
+        $box.ReadOnly = $ReadOnly
+        $box.Text = $InitialText
+        $box.Location = New-Object System.Drawing.Point(10, 55)
+        $box.Size = New-Object System.Drawing.Size(600, 285)
+        $okBtn = New-Object System.Windows.Forms.Button
+        $okBtn.Text = 'OK'
+        $okBtn.Location = New-Object System.Drawing.Point(450, 355)
+        $okBtn.Size = New-Object System.Drawing.Size(75, 30)
+        $okBtn.DialogResult = [System.Windows.Forms.DialogResult]::OK
+        $cancelBtn = New-Object System.Windows.Forms.Button
+        $cancelBtn.Text = 'Huy'
+        $cancelBtn.Location = New-Object System.Drawing.Point(535, 355)
+        $cancelBtn.Size = New-Object System.Drawing.Size(75, 30)
+        $cancelBtn.DialogResult = [System.Windows.Forms.DialogResult]::Cancel
+        $form.Controls.AddRange(@($label, $box, $okBtn, $cancelBtn))
+        $form.AcceptButton = $okBtn
+        $form.CancelButton = $cancelBtn
+        if ($form.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { return $box.Text } else { return $null }
+    } catch {
+        try { return [Microsoft.VisualBasic.Interaction]::InputBox($Prompt, $Title, $InitialText) } catch { return $null }
+    }
 }
 try {
     if (-not (Test-Path $KeyFile)) { throw 'Khong tim thay file key da ma hoa. Hay chay lai act-win.ps1 va nhap key.' }
@@ -148,7 +192,59 @@ try {
     if ($ok) {
         Show-Info2 "Da kich hoat thanh cong Windows Pro. 5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
     } else {
-        Show-Info2 "Chua kich hoat duoc bang key ban da nhap. Loi tu he thong:`n$o1`n$o2`nHay kiem tra lai key roi chay lai act-win.ps1." 'ActWin - Chua kich hoat'
+        $errText = "$o1`n$o2"
+        if ($errText.Length -gt 1500) { $errText = $errText.Substring(0, 1500) }
+        Show-Info2 "Kich hoat online khong thanh cong. Loi tu he thong:`n$errText`nBay gio se chuyen sang kich hoat bang dien thoai (phone activation)." 'ActWin - Chua kich hoat online'
+        $dtiOut = (& cscript.exe //Nologo $slmgr /dti 2>&1 | Out-String)
+        $dtiLine = ($dtiOut -split "`n") | Where-Object { $_ -match 'Installation ID' } | Select-Object -First 1
+        if (-not $dtiLine) { $dtiLine = $dtiOut }
+        $iidDigits = ($dtiLine -replace '[^0-9]', '')
+        if ($iidDigits.Length -lt 20) { $iidDigits = ($dtiOut -replace '[^0-9]', '') }
+        if ($iidDigits.Length -ge 20) {
+            $iidGroups = @()
+            for ($gi = 0; $gi -lt $iidDigits.Length; $gi += 6) { $iidGroups += $iidDigits.Substring($gi, [Math]::Min(6, $iidDigits.Length - $gi)) }
+            $iidText = "Installation ID (IID) - copy tung block theo thu tu vao trang cua Microsoft de lay Confirmation ID:`n"
+            for ($gi = 0; $gi -lt $iidGroups.Count; $gi++) { $iidText += "Buoc $($gi + 1): $($iidGroups[$gi])`n" }
+            $iidText += "`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
+            try { Set-Clipboard ($iidGroups -join ' ') } catch { }
+            try { if (Test-Path $WorkDir) { Set-Content (Join-Path $WorkDir 'IID.txt') $iidText -Force -Encoding UTF8 } } catch { }
+            try { $desk = Join-Path $env:USERPROFILE 'Desktop'; if (Test-Path $desk) { Set-Content (Join-Path $desk 'ActWin-IID.txt') $iidText -Force -Encoding UTF8 } } catch { }
+            $iidResult = Show-TextForm2 'ActWin - Installation ID' 'Copy IID theo tung buoc 1, 2, 3... vao trang cua Microsoft, lay Confirmation ID (CID) roi bam OK de nhap CID:' $iidText $true
+            if ($null -ne $iidResult) {
+                $attempt = 0
+                while ($attempt -lt 5 -and -not $ok) {
+                    $attempt++
+                    $cidInput = Show-TextForm2 'ActWin - Nhap Confirmation ID (CID)' 'Paste toan bo CID vao day (co the co khoang trang, gach ngang, xuong dong). Script se tu bo ky tu thua va tu chia lai thanh tung nhom 6 chu so:' '' $false
+                    if ($null -eq $cidInput) { break }
+                    $cidDigits = ($cidInput -replace '[^0-9]', '')
+                    if ($cidDigits.Length -lt 40) {
+                        Show-Info2 "CID vua nhap chi co $($cidDigits.Length) chu so, thuong la 48 chu so. Hay kiem tra lai va nhap lai." 'ActWin - CID chua hop le'
+                        continue
+                    }
+                    $cidGroups = @()
+                    for ($ci = 0; $ci -lt $cidDigits.Length; $ci += 6) { $cidGroups += $cidDigits.Substring($ci, [Math]::Min(6, $cidDigits.Length - $ci)) }
+                    $atpOut = (& cscript.exe //Nologo $slmgr /atp $cidDigits 2>&1 | Out-String)
+                    $phoneDeadline = (Get-Date).AddSeconds(30)
+                    while ((Get-Date) -lt $phoneDeadline) {
+                        $prods2 = Get-CimInstance -ClassName SoftwareLicensingProduct -ErrorAction SilentlyContinue |
+                            Where-Object { $_.PartialProductKey -and $_.LicenseStatus -eq 1 }
+                        foreach ($p2 in $prods2) { if ($p2.PartialProductKey -eq $last5) { $ok = $true; break } }
+                        if ($ok) { break }
+                        Start-Sleep -Seconds 5
+                    }
+                    if ($ok) {
+                        Show-Info2 "Da kich hoat thanh cong Windows Pro bang Confirmation ID. CID da chia: $($cidGroups -join ' '). 5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
+                    } else {
+                        $atpText = $atpOut
+                        if ($atpText.Length -gt 1200) { $atpText = $atpText.Substring(0, 1200) }
+                        Show-Info2 "Kich hoat bang CID chua thanh cong. Loi tu he thong:`n$atpText`nHay kiem tra lai CID va nhap lai." 'ActWin - CID chua thanh cong'
+                    }
+                }
+                if (-not $ok) { Show-Info2 'Da dung kich hoat bang dien thoai. May van la Pro nhung chua kich hoat, hay chay lai act-win.ps1 khi co CID dung.' 'ActWin - Chua kich hoat' }
+            }
+        } else {
+            Show-Info2 "Khong lay duoc Installation ID tu he thong. Loi online truoc do:`n$errText" 'ActWin - Khong lay duoc IID'
+        }
     }
 } catch {
     Show-Info2 "Phase 2 gap loi: $($_.Exception.Message)" 'ActWin - Loi'
