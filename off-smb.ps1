@@ -21,7 +21,8 @@
 #     while this script creates the correct DWord.
 #   - Final verification reads are read-only and change nothing.
 #   - The ending pause waits for any key (like the .bat pause) when a console
-#     is available, and falls back to Enter otherwise.
+#     is available, and falls back to Enter otherwise, then exits PowerShell
+#     entirely, instead of returning to the prompt.
 #
 # NOTE on steps 1 and 2: they point in opposite directions for SMB signing.
 # Step 1 writes 1, step 2 then sets the client to $false, so the final value
@@ -86,8 +87,9 @@ Write-Host ''
 Write-Host 'Xong. Hay thu ket noi lai thu muc SMB. Neu van khong duoc, khoi dong lai may roi thu lai.'
 
 try {
-    Write-Host 'Nhan phim bat ky de thoat...'
+    Write-Host 'Nhan phim bat ky de thoat va dong PowerShell...'
     $null = $Host.UI.RawUI.ReadKey('NoEcho,IncludeKeyDown')
 } catch {
-    Read-Host 'Nhan Enter de thoat'
+    Read-Host 'Nhan Enter de thoat va dong PowerShell'
 }
+exit
