@@ -41,6 +41,8 @@ try {
     $Host.UI.RawUI.BackgroundColor = [ConsoleColor]::White
     $Host.UI.RawUI.ForegroundColor = [ConsoleColor]::Black
     $Host.UI.RawUI.WindowTitle = 'DON DEP & TOI UU HE THONG'
+    $Host.UI.RawUI.BufferSize = New-Object Management.Automation.Host.Size(90, 300)
+    $Host.UI.RawUI.WindowSize = New-Object Management.Automation.Host.Size(90, 30)
     Clear-Host
 } catch { }
 
@@ -54,21 +56,19 @@ if (-not $isAdmin) {
 function Show-Header($Title) {
     Clear-Host
     Write-Host ''
-    Write-Host '    ================================================'
-    Write-Host '      DON DEP & TOI UU HE THONG'
-    Write-Host '    ================================================'
-    Write-Host ''
-    Write-Host "        DANG THUC HIEN: $Title"
-    Write-Host ''
-    Write-Host '    ================================================'
+    Write-Host '  ================================================================'
+    Write-Host '  DON DEP & TOI UU HE THONG'
+    Write-Host '  ================================================================'
+    Write-Host "  $Title"
+    Write-Host '  ----------------------------------------------------------------'
     Write-Host ''
 }
 
 function Show-Result($Text) {
     Write-Host ''
-    Write-Host '    ================================================'
-    Write-Host "        $Text"
-    Write-Host '    ================================================'
+    Write-Host '  ----------------------------------------------------------------'
+    Write-Host "  $Text"
+    Write-Host '  ----------------------------------------------------------------'
     Write-Host ''
     Start-Sleep -Seconds 2
 }
@@ -164,10 +164,10 @@ function Run-TakeOwnership {
 function Manage-WinUpdate {
     while ($true) {
         Show-Header 'QUAN LY WINDOWS UPDATE'
-        Write-Host '    1 - TAT Windows Update'
-        Write-Host '    2 - BAT Windows Update'
-        Write-Host '    3 - KIEM TRA BAN CAP NHAT'
-        Write-Host '    0 - Quay lai menu chinh'
+        Write-Host '  1. TAT Windows Update'
+        Write-Host '  2. BAT Windows Update'
+        Write-Host '  3. KIEM TRA BAN CAP NHAT'
+        Write-Host '  0. Quay lai menu chinh'
         $c = (Read-Host 'Chon [0-3]').Trim().ToUpper()
         if ($c -eq '0') { return }
         if ($c -eq '1') {
@@ -286,13 +286,13 @@ function Optimize-SystemTweaks {
 function Manage-AppOptimization {
     while ($true) {
         Show-Header 'TOI UU UNG DUNG CAD & OFFICE'
-        Write-Host '    1 - Toi uu AutoCAD/Revit/Archicad'
-        Write-Host '    2 - Toi uu MS Office (Word/Excel)'
-        Write-Host '    3 - Toi uu Print Service'
-        Write-Host '    4 - Toi uu Microsoft Teams'
-        Write-Host '    5 - Toi uu SMB File Sharing'
-        Write-Host '    6 - Toi uu hieu nang he thong'
-        Write-Host '    X - Quay lai menu chinh'
+        Write-Host '  1. Toi uu AutoCAD/Revit/Archicad'
+        Write-Host '  2. Toi uu MS Office (Word/Excel)'
+        Write-Host '  3. Toi uu Print Service'
+        Write-Host '  4. Toi uu Microsoft Teams'
+        Write-Host '  5. Toi uu SMB File Sharing'
+        Write-Host '  6. Toi uu hieu nang he thong'
+        Write-Host '  X. Quay lai menu chinh'
         $c = (Read-Host 'Chon [1-6,X]').Trim().ToUpper()
         if ($c -eq 'X') { return }
         if ($c -eq '1') { Optimize-Cad }
@@ -317,13 +317,13 @@ function Install-Software($Url, $OutFile, $Args) {
 function Manage-SoftwareInstall {
     while ($true) {
         Show-Header 'CAI DAT PHAN MEM & DRIVER'
-        Write-Host '    1 - Cai Microsoft Edge'
-        Write-Host '    2 - Cai Microsoft Teams (Desktop)'
-        Write-Host '    3 - Cai Notepad++'
-        Write-Host '    4 - Khoi phuc Windows Photo Viewer (cu)'
-        Write-Host '    5 - Khoi phuc Windows Calculator'
-        Write-Host '    6 - Cai driver bang Snappy Driver'
-        Write-Host '    X - Quay lai menu chinh'
+        Write-Host '  1. Cai Microsoft Edge'
+        Write-Host '  2. Cai Microsoft Teams (Desktop)'
+        Write-Host '  3. Cai Notepad++'
+        Write-Host '  4. Khoi phuc Windows Photo Viewer (cu)'
+        Write-Host '  5. Khoi phuc Windows Calculator'
+        Write-Host '  6. Cai driver bang Snappy Driver'
+        Write-Host '  X. Quay lai menu chinh'
         $c = (Read-Host 'Chon [1-6,X]').Trim().ToUpper()
         if ($c -eq 'X') { return }
         if ($c -eq '1') {
@@ -399,10 +399,10 @@ function Manage-DiskHealth {
     while ($true) {
         Show-Header 'KIEM TRA SUC KHOE O CUNG'
         Write-Host ''
-        Write-Host '  [1] Kiem tra SMART'
-        Write-Host '  [2] Quet loi o cung (chkdsk)'
-        Write-Host '  [3] Phan tich dung luong o dia'
-        Write-Host '  [0] Quay lai menu chinh'
+        Write-Host '  1. Kiem tra SMART'
+        Write-Host '  2. Quet loi o cung (chkdsk)'
+        Write-Host '  3. Phan tich dung luong o dia'
+        Write-Host '  0. Quay lai menu chinh'
         $c = (Read-Host 'Chon [0-3]').Trim()
         if ($c -eq '0') { return }
         if ($c -eq '1') {
@@ -441,23 +441,23 @@ function Manage-DiskHealth {
 
 while ($true) {
     Show-Header 'MENU CHINH'
-    Write-Host '     1 - Don file tam thoi he thong'
-    Write-Host '     2 - Xoa cache Windows Update'
-    Write-Host '     3 - Don cache trinh duyet'
-    Write-Host '     4 - Chay Disk Cleanup (nang cao)'
-    Write-Host '     5 - Sua loi he thong (SFC/DISM)'
-    Write-Host '     6 - Quan ly quyen so huu'
-    Write-Host '     7 - Quan ly Windows Update'
-    Write-Host '     8 - Xoa cache card man hinh'
-    Write-Host '     9 - Toi uu ung dung CAD/Office'
-    Write-Host '     A - Cai dat phan mem & Driver'
-    Write-Host '     B - Huong dan nang cao'
-    Write-Host '     C - Tao diem khoi phuc he thong [MOI]'
-    Write-Host '     D - Quan ly ung dung khoi dong [MOI]'
-    Write-Host '     E - Kiem tra suc khoe o cung [MOI]'
-    Write-Host '     0 - Thoat chuong trinh'
+    Write-Host '  1. Don file tam thoi he thong'
+    Write-Host '  2. Xoa cache Windows Update'
+    Write-Host '  3. Don cache trinh duyet'
+    Write-Host '  4. Chay Disk Cleanup (nang cao)'
+    Write-Host '  5. Sua loi he thong (SFC/DISM)'
+    Write-Host '  6. Quan ly quyen so huu'
+    Write-Host '  7. Quan ly Windows Update'
+    Write-Host '  8. Xoa cache card man hinh'
+    Write-Host '  9. Toi uu ung dung CAD/Office'
+    Write-Host '  A. Cai dat phan mem & Driver'
+    Write-Host '  B. Huong dan nang cao'
+    Write-Host '  C. Tao diem khoi phuc he thong [MOI]'
+    Write-Host '  D. Quan ly ung dung khoi dong [MOI]'
+    Write-Host '  E. Kiem tra suc khoe o cung [MOI]'
+    Write-Host '  0. Thoat chuong trinh'
     Write-Host ''
-    Write-Host '    ================================================'
+    Write-Host '  ================================================================'
     Write-Host ''
     $choice = (Read-Host 'Moi chon [0-9,A-E]').Trim().ToUpper()
     switch ($choice) {
