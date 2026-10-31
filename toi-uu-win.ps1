@@ -1,4 +1,4 @@
-# toi-uu-win.ps1 - DON DEP & TOI UU HE THONG, PowerShell version of Bimaster_CleanUp.bat
+# toi-uu-win.ps1 - DON DEP & TOI UU HE THONG, PowerShell version of the original .bat cleanup tool
 # Run as Administrator (the script self-elevates if it is not):
 #   irm https://raw.githubusercontent.com/milansavio/Savio/main/toi-uu-win.ps1 | iex
 #
@@ -40,7 +40,7 @@
 try {
     $Host.UI.RawUI.BackgroundColor = [ConsoleColor]::White
     $Host.UI.RawUI.ForegroundColor = [ConsoleColor]::Black
-    $Host.UI.RawUI.WindowTitle = 'DON DEP & TOI UU HE THONG - BIMASTER JSC'
+    $Host.UI.RawUI.WindowTitle = 'DON DEP & TOI UU HE THONG'
     Clear-Host
 } catch { }
 
@@ -55,7 +55,7 @@ function Show-Header($Title) {
     Clear-Host
     Write-Host ''
     Write-Host '    ================================================'
-    Write-Host '      DON DEP & TOI UU HE THONG - BIMASTER JSC'
+    Write-Host '      DON DEP & TOI UU HE THONG'
     Write-Host '    ================================================'
     Write-Host ''
     Write-Host "        DANG THUC HIEN: $Title"
@@ -385,7 +385,7 @@ function Show-GpuGuide {
 function New-RestorePoint {
     Show-Header 'TAO DIEM KHOI PHUC HE THONG'
     Write-Host 'Dang tao diem khoi phuc...'
-    try { Checkpoint-Computer -Description 'Bimaster_CleanUp_RestorePoint' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop; Show-Result 'Da tao diem khoi phuc thanh cong' } catch { Show-Result "Tao diem khoi phuc loi (co the System Restore dang tat): $($_.Exception.Message)" }
+    try { Checkpoint-Computer -Description 'ToiUuWin_RestorePoint' -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop; Show-Result 'Da tao diem khoi phuc thanh cong' } catch { Show-Result "Tao diem khoi phuc loi (co the System Restore dang tat): $($_.Exception.Message)" }
 }
 
 function Open-StartupManager {
