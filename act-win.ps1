@@ -22,7 +22,7 @@ trim and an empty check, because a trailing newline caused
 "Input string was not in a correct format" on some machines.
 Phone activation 2026-10-31: in phase 2, if online activation fails,
 show the online error, export the Installation ID (slmgr /dti) in
-groups of 6 in step order in a copyable textbox plus clipboard plus
+groups of 7 in step order in a copyable textbox plus clipboard plus
 a Desktop file, then show a CID entry form that accepts a pasted
 whole CID, strips non-digits and splits it into groups of 6, runs
 slmgr /atp, re-checks Licensed plus last-5, and shows success on a
@@ -40,6 +40,9 @@ IID layout 2026-10-31: the IID textbox must use CRLF line breaks,
 not LF only, or WinForms shows all steps on one wrapped line. Layout
 is now: link line aka.ms/aoh, blank line, one step per line, blank
 line, then the single-line copy-all form, in both inline and phase 2.
+IID step size 2026-10-31: 1 step = 7 characters, not 6. A 63-digit IID
+therefore gives 9 steps, matching the aka.ms/aoh page, not 11 steps
+of 6 plus a 3-digit remainder.
 Choice 1 flow: key prompt -> if already Pro, activate now -> otherwise
 create a logon task for phase 2, upgrade the edition with Microsoft's
 public generic Pro upgrade key, Windows reboots itself, phase 2 installs the user's key
@@ -219,7 +222,7 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput) {
         return $false
     }
     $iidGroups = @()
-    for ($gi = 0; $gi -lt $iidDigits.Length; $gi += 6) { $iidGroups += $iidDigits.Substring($gi, [Math]::Min(6, $iidDigits.Length - $gi)) }
+    for ($gi = 0; $gi -lt $iidDigits.Length; $gi += 7) { $iidGroups += $iidDigits.Substring($gi, [Math]::Min(7, $iidDigits.Length - $gi)) }
     $iidText = "Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID`r`n`r`n"
     for ($gi = 0; $gi -lt $iidGroups.Count; $gi++) { $iidText += "Buoc $($gi + 1): $($iidGroups[$gi])`r`n" }
     $iidText += "`r`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
@@ -385,7 +388,7 @@ try {
         if ($iidDigits.Length -lt 20) { $iidDigits = ($dtiOut -replace '[^0-9]', '') }
         if ($iidDigits.Length -ge 20) {
             $iidGroups = @()
-            for ($gi = 0; $gi -lt $iidDigits.Length; $gi += 6) { $iidGroups += $iidDigits.Substring($gi, [Math]::Min(6, $iidDigits.Length - $gi)) }
+            for ($gi = 0; $gi -lt $iidDigits.Length; $gi += 7) { $iidGroups += $iidDigits.Substring($gi, [Math]::Min(7, $iidDigits.Length - $gi)) }
             $iidText = "Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID`r`n`r`n"
             for ($gi = 0; $gi -lt $iidGroups.Count; $gi++) { $iidText += "Buoc $($gi + 1): $($iidGroups[$gi])`r`n" }
             $iidText += "`r`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
