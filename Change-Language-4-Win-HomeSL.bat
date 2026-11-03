@@ -114,11 +114,15 @@ echo  TIEN TRINH DANG DUOC THUC THI - DUNG TAT TOOLS NGANG
 echo =======================================================
 echo Ngon ngu dich: %LANG_CODE% (Cai dat day du)
 echo.
+echo [Buoc 0] Dang kiem tra va tam mo Windows Update de tai goi (neu dang pause)...
+call :PAUSE_LIFT
 echo [Buoc 1] Dang tai va nap day du goi tinh nang (MUI + Keyboard)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-WindowsCapability -Online -Name 'Language.Basic~~~%LANG_CODE%~~~0.0.1.0' -ErrorAction SilentlyContinue"
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Install-Language -Language %LANG_CODE% -ErrorAction SilentlyContinue } catch {}"
+call :PAUSE_RESTORE
 call :CHECK_LPCAB
 if %errorlevel% neq 0 (
+    call :PAUSE_RESTORE
     pause >nul
     goto :MENU_LANG
 )
@@ -137,10 +141,14 @@ echo  TIEN TRINH DANG DUOC THUC THI - DUNG TAT TOOLS NGANG
 echo =======================================================
 echo Ngon ngu dich: %LANG_CODE% (Chi ngon ngu hien thi)
 echo.
+echo [Buoc 0] Dang kiem tra va tam mo Windows Update de tai goi (neu dang pause)...
+call :PAUSE_LIFT
 echo [Buoc 1] Dang tai va nap duy nhat goi ngon ngu hien thi (MUI)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Install-Language -Language %LANG_CODE% -ExcludeFeatures -ErrorAction SilentlyContinue } catch {}"
+call :PAUSE_RESTORE
 call :CHECK_LPCAB
 if %errorlevel% neq 0 (
+    call :PAUSE_RESTORE
     pause >nul
     goto :MENU_LANG
 )
@@ -159,12 +167,16 @@ echo  TIEN TRINH DANG DUOC THUC THI - DUNG TAT TOOLS NGANG
 echo =======================================================
 echo Ngon ngu dich: %LANG_CODE% (Chi bo go ban phim)
 echo.
+echo [Buoc 0] Dang kiem tra va tam mo Windows Update de tai goi (neu dang pause)...
+call :PAUSE_LIFT
 echo [Buoc 1] Dang tai va nap thanh phan bo go (Basic Input)...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-WindowsCapability -Online -Name 'Language.Basic~~~%LANG_CODE%~~~0.0.1.0' -ErrorAction SilentlyContinue"
+call :PAUSE_RESTORE
 echo.
 echo [Kiem tra] Dang xac nhan goi ngon ngu %LANG_CODE% da duoc cai dat...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$cap = Get-WindowsCapability -Online -Name 'Language.Basic~~~%LANG_CODE%~~~0.0.1.0' -ErrorAction SilentlyContinue; if ($null -eq $cap -or $cap.State -ne 'Installed') { exit 1 }"
 if %errorlevel% neq 0 (
+    call :PAUSE_RESTORE
     echo.
     echo [CANH BAO] Goi ngon ngu %LANG_CODE% CHUA duoc cai dat thanh cong!
     echo Nguyen nhan thuong gap: khong co mang, Windows Update dang bi tam dung,
@@ -307,4 +319,18 @@ taskkill /f /im SystemSettings.exe >nul 2>&1
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA 'Packages\windows.immersivecontrolpanel_cw5n1h2txyewy\LocalState') -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA 'Packages\windows.immersivecontrolpanel_cw5n1h2txyewy\TempState') -ErrorAction SilentlyContinue" >nul 2>&1
 echo [Kiem tra] Dang xac nhan cac lop hien thi sau khi ap dung...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$list = Get-WinUserLanguageList; $first = $list[0].LanguageTag; $ovr = Get-WinUILanguageOverride; $sys = Get-SystemPreferredUILanguage; $fp = ($first -split '-')[0]; $op = ($ovr -split '-')[0]; $sp = ($sys -split '-')[0]; $tp = ('%LANG_CODE%' -split '-')[0]; $lp = Get-InstalledLanguage -Language %LANG_CODE% -ErrorAction SilentlyContinue; $hasLp = ($null -ne $lp -and (($lp.LanguagePacks -join ' ') -match 'LpCab|LXP')); Write-Host ('[Kiem tra] Goi hien thi: ' + $(if ($hasLp) { 'DA CAI' } else { 'CHUA CO' })); Write-Host ('[Kiem tra] Ngon ngu dau danh sach User: ' + $first); Write-Host ('[Kiem tra] WinUI Override: ' + $ovr); Write-Host ('[Kiem tra] System Preferred UI: ' + $sys); if (($fp -eq $tp) -and ($op -eq $tp) -and ($sp -eq $tp)) { Write-Host ('[Kiem tra] OK - Sau khi khoi dong lai, giao dien se hien thi bang %LANG_CODE%.') } else { Write-Host '[CANH BAO] Cac lop hien thi chua khop het - giao dien co the van hien thi ngon ngu cu sau khi khoi dong lai, hay kiem tra lai trong Settings.' }"
+exit /b 0
+
+:: ==========================================
+:: TAM MO / KHOI PHUC PAUSE WINDOWS UPDATE
+:: Chi dung trong luc tai goi ngon ngu (lua chon 1, 2, 3).
+:: Neu may von khong pause thi khong lam gi, khong ep pause moi.
+:: Khoi phuc chay ca khi tai thanh cong lan khi tai that bai.
+:: ==========================================
+:PAUSE_LIFT
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$k='HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'; $names=@('PauseFeatureUpdatesStartTime','PauseFeatureUpdatesEndTime','PauseQualityUpdatesStartTime','PauseQualityUpdatesEndTime','PauseUpdatesStartTime','PauseUpdatesExpiryTime'); $bak=Join-Path $env:TEMP 'SavioPauseBackup.txt'; $flag=Join-Path $env:TEMP 'SavioPauseWasPaused.txt'; $out=@(); foreach ($n in $names) { try { $v=(Get-ItemProperty -Path $k -Name $n -ErrorAction Stop).$n; $out+=($n+'='+$v) } catch { $out+=($n+'=') } }; $out | Out-File -FilePath $bak -Encoding ascii; $was='0'; if (Test-Path $bak) { try { $exp=[datetimeoffset]::Parse((Get-ItemProperty -Path $k -Name 'PauseUpdatesExpiryTime' -ErrorAction Stop).PauseUpdatesExpiryTime); if ($exp -gt [datetimeoffset]::UtcNow) { $was='1' } } catch {} }; $was | Out-File -FilePath $flag -Encoding ascii; if ($was -eq '1') { foreach ($n in $names) { Remove-ItemProperty -Path $k -Name $n -ErrorAction SilentlyContinue }; Write-Host '[Tam mo] Windows Update dang pause, da tam mo de tai goi.' }"
+exit /b 0
+
+:PAUSE_RESTORE
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$flag=Join-Path $env:TEMP 'SavioPauseWasPaused.txt'; if (!(Test-Path $flag)) { exit 0 }; $was=(Get-Content $flag -ErrorAction SilentlyContinue | Select-Object -First 1); if ($was -ne '1') { Remove-Item $flag -Force -ErrorAction SilentlyContinue; exit 0 }; $bak=Join-Path $env:TEMP 'SavioPauseBackup.txt'; $k='HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'; $found=Test-Path $bak; if ($found) { foreach ($line in (Get-Content $bak)) { if ($line -match '^([^=]+)=(.*)$') { $n=$matches[1]; $v=$matches[2]; if ($v -ne '') { New-ItemProperty -Path $k -Name $n -PropertyType String -Value $v -Force -ErrorAction SilentlyContinue } else { Remove-ItemProperty -Path $k -Name $n -ErrorAction SilentlyContinue } } } }; Remove-Item $flag -Force -ErrorAction SilentlyContinue; if ($found) { Remove-Item $bak -Force -ErrorAction SilentlyContinue; Write-Host '[Khoi phuc] Da khoi phuc lai trang thai pause nhu truoc.' } else { Write-Host '[Khoi phuc] Khong tim thay file sao luu pause, khong khoi phuc duoc.' }"
 exit /b 0
