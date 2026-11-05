@@ -405,22 +405,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-SystemPreferredUILan
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "InstallLanguage" /t REG_SZ /d "0409" /f >nul 2>&1
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "Default" /t REG_SZ /d "0409" /f >nul 2>&1
 if not exist "C:\ProgramData\Savio" mkdir "C:\ProgramData\Savio" >nul 2>&1
-echo $keep = @('en-US', '%LANG_CODE%') > "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo $pkgs = Get-WindowsPackage -Online >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo foreach ($p in $pkgs) { >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo   if ($p.PackageName -match 'LanguagePack') { >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo     $m = [regex]::Match($p.PackageName, '~([a-z]{2}-[A-Z]{2})~') >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo     if ($m.Success) { >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo       $tag = $m.Groups[1].Value >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo       if ($keep -notcontains $tag) { >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo         Write-Host ('Dang go goi ngon ngu: ' + $tag) >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo         Remove-WindowsPackage -Online -PackageName $p.PackageName -NoRestart -ErrorAction SilentlyContinue >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo       } >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo     } >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo   } >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo } >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-echo Write-Host 'Da go xong cac goi ngon ngu khac.' >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
-powershell -NoProfile -ExecutionPolicy Bypass -File "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$keep = @('en-US', '%LANG_CODE%'); $pkgs = Get-WindowsPackage -Online; foreach ($p in $pkgs) { if ($p.PackageName -match 'LanguagePack') { $m = [regex]::Match($p.PackageName, '~([a-z]{2}-[A-Z]{2})~'); if ($m.Success) { $tag = $m.Groups[1].Value; if ($keep -notcontains $tag) { Write-Host ('Dang go goi ngon ngu: ' + $tag); Remove-WindowsPackage -Online -PackageName $p.PackageName -NoRestart -ErrorAction SilentlyContinue } } } }"
+echo Da go xong cac goi ngon ngu khac.
 echo [Buoc 10] Dang ap dung lai ngon ngu %LANG_CODE% sau khi go...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-SystemPreferredUILanguage -Language %LANG_CODE%" >nul 2>&1
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "InstallLanguage" /t REG_SZ /d "%HEX_ID%" /f >nul 2>&1
