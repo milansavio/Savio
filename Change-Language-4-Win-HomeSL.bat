@@ -319,6 +319,8 @@ taskkill /f /im SystemSettings.exe >nul 2>&1
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA 'Packages\windows.immersivecontrolpanel_cw5n1h2txyewy\LocalState') -ErrorAction SilentlyContinue; Remove-Item -Recurse -Force (Join-Path $env:LOCALAPPDATA 'Packages\windows.immersivecontrolpanel_cw5n1h2txyewy\TempState') -ErrorAction SilentlyContinue" >nul 2>&1
 echo [Kiem tra] Dang xac nhan cac lop hien thi sau khi ap dung...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$list = Get-WinUserLanguageList; $first = $list[0].LanguageTag; $ovr = Get-WinUILanguageOverride; $sys = Get-SystemPreferredUILanguage; $fp = ($first -split '-')[0]; $op = ($ovr -split '-')[0]; $sp = ($sys -split '-')[0]; $tp = ('%LANG_CODE%' -split '-')[0]; $lp = Get-InstalledLanguage -Language %LANG_CODE% -ErrorAction SilentlyContinue; $hasLp = ($null -ne $lp -and (($lp.LanguagePacks -join ' ') -match 'LpCab|LXP')); Write-Host ('[Kiem tra] Goi hien thi: ' + $(if ($hasLp) { 'DA CAI' } else { 'CHUA CO' })); Write-Host ('[Kiem tra] Ngon ngu dau danh sach User: ' + $first); Write-Host ('[Kiem tra] WinUI Override: ' + $ovr); Write-Host ('[Kiem tra] System Preferred UI: ' + $sys); if (($fp -eq $tp) -and ($op -eq $tp) -and ($sp -eq $tp)) { Write-Host ('[Kiem tra] OK - Sau khi khoi dong lai, giao dien se hien thi bang %LANG_CODE%.') } else { Write-Host '[CANH BAO] Cac lop hien thi chua khop het - giao dien co the van hien thi ngon ngu cu sau khi khoi dong lai, hay kiem tra lai trong Settings.' }"
+echo.
+call :CREATE_LANGLOCK_TASK
 exit /b 0
 
 :: ==========================================
@@ -333,4 +335,49 @@ exit /b 0
 
 :PAUSE_RESTORE
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$flag=Join-Path $env:TEMP 'SavioPauseWasPaused.txt'; if (!(Test-Path $flag)) { exit 0 }; $was=(Get-Content $flag -ErrorAction SilentlyContinue | Select-Object -First 1); if ($was -ne '1') { Remove-Item $flag -Force -ErrorAction SilentlyContinue; exit 0 }; $bak=Join-Path $env:TEMP 'SavioPauseBackup.txt'; $k='HKLM:\SOFTWARE\Microsoft\WindowsUpdate\UX\Settings'; $found=Test-Path $bak; if ($found) { foreach ($line in (Get-Content $bak)) { if ($line -match '^([^=]+)=(.*)$') { $n=$matches[1]; $v=$matches[2]; if ($v -ne '') { New-ItemProperty -Path $k -Name $n -PropertyType String -Value $v -Force -ErrorAction SilentlyContinue } else { Remove-ItemProperty -Path $k -Name $n -ErrorAction SilentlyContinue } } } }; Remove-Item $flag -Force -ErrorAction SilentlyContinue; if ($found) { Remove-Item $bak -Force -ErrorAction SilentlyContinue; Write-Host '[Khoi phuc] Da khoi phuc lai trang thai pause nhu truoc.' } else { Write-Host '[Khoi phuc] Khong tim thay file sao luu pause, khong khoi phuc duoc.' }"
+exit /b 0
+
+
+:: ==========================================
+:: TAC VU TASK SCHEDULER GIU NGON NGU SAU KHOI DONG (CHI CHO NGON NGU LIP)
+:: Ly do: tren Win Home SL, Windows ghi de InstallLanguage va Default system UI
+:: ve ngon ngu MUI goc (vd: th-TH) khi khoi dong, neu ngon ngu dich chi la LIP
+:: (vi-VN, hi-IN, id-ID). Tac vu nay chay lai sau moi lan dang nhap, tre 30 giay,
+:: de ghi de lai ID ngon ngu da chon. Tac vu TON TAI vinh vien cho den khi chon
+:: mot ngon ngu MUI hoac xoa tay bang schtasks /Delete /TN "Savio-LangLock" /F
+:: Chu y: day la thu nghiem, chua chac chan thang duoc co che ghi de khi boot.
+:: Tac vu khong tu khoi dong lai may, khong tu dang xuat. Sau khi khoi dong lai,
+:: hay dang xuat roi dang nhap lai de xem giao dien co doi khong, va kiem tra
+:: file log C:\ProgramData\Savio\LangLock.log de biet tac vu co chay khong.
+:: ==========================================
+:CREATE_LANGLOCK_TASK
+echo.
+if "%IS_LIP%"=="0" (
+    schtasks /Delete /TN "Savio-LangLock" /F >nul 2>&1
+    echo [Buoc 9] Ngon ngu %LANG_CODE% la dang MUI/day du, khong can tac vu khoi dong. Da xoa tac vu cu (neu co).
+    exit /b 0
+)
+echo [Buoc 9] Dang tao tac vu Task Scheduler de giu ngon ngu %LANG_CODE% sau moi lan khoi dong...
+schtasks /Delete /TN "Savio-LangLock" /F >nul 2>&1
+if not exist "C:\ProgramData\Savio" mkdir "C:\ProgramData\Savio" >nul 2>&1
+echo @echo off > "C:\ProgramData\Savio\LangLock.bat"
+echo reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "InstallLanguage" /t REG_SZ /d "%HEX_ID%" /f ^>nul 2^>^&1 >> "C:\ProgramData\Savio\LangLock.bat"
+echo reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "Default" /t REG_SZ /d "%HEX_ID%" /f ^>nul 2^>^&1 >> "C:\ProgramData\Savio\LangLock.bat"
+echo powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-SystemPreferredUILanguage -Language %LANG_CODE%" ^>nul 2^>^&1 >> "C:\ProgramData\Savio\LangLock.bat"
+echo powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-WinUILanguageOverride -Language %LANG_CODE%" ^>nul 2^>^&1 >> "C:\ProgramData\Savio\LangLock.bat"
+echo powershell -NoProfile -ExecutionPolicy Bypass -Command "$L = Get-WinUserLanguageList; $N = New-WinUserLanguageList -Language %LANG_CODE%; foreach ($x in $L) { if ($x.LanguageTag -ne '%LANG_CODE%') { $N.Add($x) } }; Set-WinUserLanguageList -LanguageList $N -Force" ^>nul 2^>^&1 >> "C:\ProgramData\Savio\LangLock.bat"
+echo powershell -NoProfile -ExecutionPolicy Bypass -Command "Add-Content -Path 'C:\ProgramData\Savio\LangLock.log' -Value ((Get-Date).ToString('yyyy-MM-dd HH:mm:ss') + ' LangLock %LANG_CODE% %HEX_ID%')" ^>nul 2^>^&1 >> "C:\ProgramData\Savio\LangLock.bat"
+schtasks /Create /TN "Savio-LangLock" /TR "C:\ProgramData\Savio\LangLock.bat" /SC ONLOGON /DELAY 0000:30 /RL HIGHEST /F
+if %errorlevel% neq 0 (
+    echo [CANH BAO] Khong tao duoc tac vu Savio-LangLock. Hay chay tool voi quyen Admin roi thu lai.
+    exit /b 0
+)
+schtasks /Query /TN "Savio-LangLock" >nul 2>&1
+if %errorlevel% == 0 (
+    echo [Buoc 9] Da tao tac vu Savio-LangLock: chay sau moi lan dang nhap, tre 30 giay, quyen cao nhat.
+    echo [Buoc 9] File tac vu: C:\ProgramData\Savio\LangLock.bat - Log: C:\ProgramData\Savio\LangLock.log
+    echo [Buoc 9] Sau khi khoi dong lai, hay dang xuat roi dang nhap lai, roi kiem tra log de biet tac vu co chay khong.
+) else (
+    echo [CANH BAO] Tac vu Savio-LangLock khong ton tai sau khi tao. Hay kiem tra Task Scheduler tay.
+)
 exit /b 0
