@@ -321,6 +321,7 @@ echo [Kiem tra] Dang xac nhan cac lop hien thi sau khi ap dung...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$list = Get-WinUserLanguageList; $first = $list[0].LanguageTag; $ovr = Get-WinUILanguageOverride; $sys = Get-SystemPreferredUILanguage; $fp = ($first -split '-')[0]; $op = ($ovr -split '-')[0]; $sp = ($sys -split '-')[0]; $tp = ('%LANG_CODE%' -split '-')[0]; $lp = Get-InstalledLanguage -Language %LANG_CODE% -ErrorAction SilentlyContinue; $hasLp = ($null -ne $lp -and (($lp.LanguagePacks -join ' ') -match 'LpCab|LXP')); Write-Host ('[Kiem tra] Goi hien thi: ' + $(if ($hasLp) { 'DA CAI' } else { 'CHUA CO' })); Write-Host ('[Kiem tra] Ngon ngu dau danh sach User: ' + $first); Write-Host ('[Kiem tra] WinUI Override: ' + $ovr); Write-Host ('[Kiem tra] System Preferred UI: ' + $sys); if (($fp -eq $tp) -and ($op -eq $tp) -and ($sp -eq $tp)) { Write-Host ('[Kiem tra] OK - Sau khi khoi dong lai, giao dien se hien thi bang %LANG_CODE%.') } else { Write-Host '[CANH BAO] Cac lop hien thi chua khop het - giao dien co the van hien thi ngon ngu cu sau khi khoi dong lai, hay kiem tra lai trong Settings.' }"
 echo.
 call :CREATE_LANGLOCK_TASK
+call :REMOVE_OTHER_LANGS
 exit /b 0
 
 :: ==========================================
@@ -380,4 +381,52 @@ if %errorlevel% == 0 (
 ) else (
     echo [CANH BAO] Tac vu Savio-LangLock khong ton tai sau khi tao. Hay kiem tra Task Scheduler tay.
 )
+exit /b 0
+
+:: ==========================================
+:: GO CAC NGON NGU KHAC, CHI GIU TIENG ANH VA NGON NGU DA CHON (CHI CHO LIP)
+:: Ly do: ngon ngu LIP (vi-VN, hi-IN, id-ID) can tieng Anh en-US lam goc day du.
+:: Neu con goi MUI tieng Thai / tieng Trung trong may, khi khoi dong Windows se
+:: roi ve goi MUI do thay vi hien thi LIP. Go het cac goi khac, chi giu en-US
+:: va ngon ngu da chon, thi khong con goi nao khac de roi ve nua.
+:: Chu y: day la thay doi he thong, can diem khoi phuc truoc. Go tung goi,
+:: goi nao loi thi van go tiep goi sau, khong dung lai. Sau khi go xong se
+:: ap dung lai ngon ngu da chon, roi moi khoi dong lai.
+:: ==========================================
+:REMOVE_OTHER_LANGS
+echo.
+if "%IS_LIP%"=="0" (
+    echo [Buoc 10] Ngon ngu %LANG_CODE% la dang MUI/day du, khong can go cac ngon ngu khac.
+    exit /b 0
+)
+echo [Buoc 10] Dang go cac ngon ngu khac, chi giu tieng Anh en-US va %LANG_CODE%...
+echo [Buoc 10] Truoc khi go, dang dat lai ngon ngu he thong ve tieng Anh de go goi Thai...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-SystemPreferredUILanguage -Language en-US" >nul 2>&1
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "InstallLanguage" /t REG_SZ /d "0409" /f >nul 2>&1
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "Default" /t REG_SZ /d "0409" /f >nul 2>&1
+if not exist "C:\ProgramData\Savio" mkdir "C:\ProgramData\Savio" >nul 2>&1
+echo $keep = @('en-US', '%LANG_CODE%') > "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo $pkgs = Get-WindowsPackage -Online >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo foreach ($p in $pkgs) { >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo   if ($p.PackageName -match 'LanguagePack') { >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo     $m = [regex]::Match($p.PackageName, '~([a-z]{2}-[A-Z]{2})~') >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo     if ($m.Success) { >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo       $tag = $m.Groups[1].Value >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo       if ($keep -notcontains $tag) { >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo         Write-Host ('Dang go goi ngon ngu: ' + $tag) >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo         Remove-WindowsPackage -Online -PackageName $p.PackageName -NoRestart -ErrorAction SilentlyContinue >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo       } >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo     } >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo   } >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo } >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo Write-Host 'Da go xong cac goi ngon ngu khac.' >> "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\ProgramData\Savio\RemoveOtherLangs.ps1"
+echo [Buoc 10] Dang ap dung lai ngon ngu %LANG_CODE% sau khi go...
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-SystemPreferredUILanguage -Language %LANG_CODE%" >nul 2>&1
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "InstallLanguage" /t REG_SZ /d "%HEX_ID%" /f >nul 2>&1
+reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "Default" /t REG_SZ /d "%HEX_ID%" /f >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-WinUILanguageOverride -Language %LANG_CODE%" >nul 2>&1
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$L = Get-WinUserLanguageList; $N = New-WinUserLanguageList -Language %LANG_CODE%; foreach ($x in $L) { if ($x.LanguageTag -ne '%LANG_CODE%') { $N.Add($x) } }; Set-WinUserLanguageList -LanguageList $N -Force" >nul 2>&1
+echo [Buoc 10] Danh sach ngon ngu con lai sau khi go:
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-InstalledLanguage | ForEach-Object { Write-Host $_.LanguageId }"
 exit /b 0
