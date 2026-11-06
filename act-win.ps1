@@ -287,12 +287,6 @@ function Show-TextForm($Title, $Prompt, $InitialText, $ReadOnly) {
         try { return [Microsoft.VisualBasic.Interaction]::InputBox($Prompt, $Title, $InitialText) } catch { return $null }
     }
 }
-function Save-ActivationRecord($IidGroups, $CidGroups, $Last5) {
-    $record = "`r`n----------------------------------------`r`nKET QUA KICH HOAT QUA PHONE`r`nNgay: $((Get-Date).ToString('yyyy-MM-dd HH:mm:ss'))`r`nIID: $($IidGroups -join ' ')`r`nCID: $($CidGroups -join ' ')`r`n5 ky tu cuoi cua Key: $Last5`r`nTrang thai: Da kich hoat - Licensed"
-    try { $desk = Join-Path $env:USERPROFILE 'Desktop'; if (Test-Path $desk) { $f = Join-Path $desk 'ActWin-IID.txt'; if (Test-Path $f) { Add-Content $f $record -Encoding UTF8 } else { Set-Content $f $record -Force -Encoding UTF8 } } } catch { }
-    try { $tf = Join-Path $env:TEMP 'ActWin-IID.txt'; if (Test-Path $tf) { Add-Content $tf $record -Encoding UTF8 } } catch { }
-}
-
 function Invoke-PhoneActivation($Last5, $ErrorOutput) {
     $errText = $ErrorOutput
     if ($errText.Length -gt 1500) { $errText = $errText.Substring(0, 1500) }
@@ -343,7 +337,6 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput) {
         }
         Stop-ActivatingNotice $phoneNotice
         if ($phoneOk) {
-            Save-ActivationRecord $iidGroups $cidGroups $Last5
             Show-Info "Da kich hoat thanh cong Windows Pro bang Confirmation ID.`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $Last5" 'ActWin - Thanh cong'
             return $true
         }
@@ -543,7 +536,6 @@ try {
                     }
                     Stop-Notice2 $noticePhone
                     if ($ok) {
-                        Save-ActivationRecord $iidGroups $cidGroups $last5
                         Show-Info2 "Da kich hoat thanh cong Windows Pro bang Confirmation ID.`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
                     } else {
                         $atpText = $atpOut
