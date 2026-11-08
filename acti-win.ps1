@@ -1,5 +1,5 @@
 <#
-act-win.ps1 - Windows 10/11 Home -> Pro, legitimate edition upgrade.
+acti-win.ps1 - Windows 10/11 Home -> Pro, legitimate edition upgrade.
 This script only activates Windows with a product key the user owns
 and types in at runtime. The key is never written to this file, never
 pushed to GitHub, and is stored only locally, encrypted, until phase 2
@@ -78,10 +78,10 @@ $TaskName = 'ActWin-Phase2'
 $CleanupTaskName = 'ActWin-Cleanup'
 $WorkDir  = Join-Path $env:ProgramData 'ActWin'
 $KeyFile  = Join-Path $WorkDir 'key.txt'
-$Phase2File = Join-Path $WorkDir 'act-win-phase2.ps1'
-$CleanupFile = Join-Path $WorkDir 'act-win-cleanup.ps1'
+$Phase2File = Join-Path $WorkDir 'acti-win-phase2.ps1'
+$CleanupFile = Join-Path $WorkDir 'acti-win-cleanup.ps1'
 $GenericProKey = 'VK7JG-NPHTM-C97JM-9MPGT-3V66T'
-$RawUrl = 'https://raw.githubusercontent.com/milansavio/Savio/main/act-win.ps1'
+$RawUrl = 'https://raw.githubusercontent.com/milansavio/Savio/main/acti-win.ps1'
 
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
@@ -344,7 +344,7 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput) {
         if ($atpText.Length -gt 1200) { $atpText = $atpText.Substring(0, 1200) }
         Show-Info "Kich hoat bang CID chua thanh cong. Loi tu he thong:`n$atpText`nHay kiem tra lai CID va nhap lai." 'ActWin - CID chua thanh cong'
     }
-    Show-Info 'Da dung kich hoat bang dien thoai. May van la Pro nhung chua kich hoat, hay chay lai act-win.ps1 khi co CID dung.' 'ActWin - Chua kich hoat'
+    Show-Info 'Da dung kich hoat bang dien thoai. May van la Pro nhung chua kich hoat, hay chay lai acti-win.ps1 khi co CID dung.' 'ActWin - Chua kich hoat'
     return $false
 }
 function Remove-Phase2Artifacts {
@@ -458,10 +458,10 @@ function Stop-Notice2($Proc) {
     try { if ($Proc -and -not $Proc.HasExited) { Stop-Process -Id $Proc.Id -Force -ErrorAction SilentlyContinue } } catch { }
 }
 try {
-    if (-not (Test-Path $KeyFile)) { throw 'Khong tim thay file key da ma hoa. Hay chay lai act-win.ps1 va nhap key.' }
+    if (-not (Test-Path $KeyFile)) { throw 'Khong tim thay file key da ma hoa. Hay chay lai acti-win.ps1 va nhap key.' }
     $enc = (Get-Content $KeyFile -Raw).Trim()
     $enc = $enc.Trim([char]0xFEFF)
-    if ([string]::IsNullOrWhiteSpace($enc)) { throw 'File key da ma hoa rong. Hay chay lai act-win.ps1 va nhap key.' }
+    if ([string]::IsNullOrWhiteSpace($enc)) { throw 'File key da ma hoa rong. Hay chay lai acti-win.ps1 va nhap key.' }
     $secure = ConvertTo-SecureString $enc
     $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     $key = [Runtime.InteropServices.Marshal]::PtrToStringAuto($ptr)
@@ -543,7 +543,7 @@ try {
                         Show-Info2 "Kich hoat bang CID chua thanh cong. Loi tu he thong:`n$atpText`nHay kiem tra lai CID va nhap lai." 'ActWin - CID chua thanh cong'
                     }
                 }
-                if (-not $ok) { Show-Info2 'Da dung kich hoat bang dien thoai. May van la Pro nhung chua kich hoat, hay chay lai act-win.ps1 khi co CID dung.' 'ActWin - Chua kich hoat' }
+                if (-not $ok) { Show-Info2 'Da dung kich hoat bang dien thoai. May van la Pro nhung chua kich hoat, hay chay lai acti-win.ps1 khi co CID dung.' 'ActWin - Chua kich hoat' }
             }
         } else {
             Show-Info2 "Khong lay duoc Installation ID tu he thong. Loi online truoc do:`n$errText" 'ActWin - Khong lay duoc IID'
@@ -601,7 +601,7 @@ try {
     if ($editionC -match 'Professional') {
         Show-InfoC 'Da upgrade len Windows Pro. Lua chon 2 khong kich hoat, ban co the kich hoat sau bang key cua ban.' 'ActWin - Da len Pro'
     } else {
-        Show-InfoC 'May chua len Pro. Hay chay lai act-win.ps1 va chon lai.' 'ActWin - Chua len Pro'
+        Show-InfoC 'May chua len Pro. Hay chay lai acti-win.ps1 va chon lai.' 'ActWin - Chua len Pro'
     }
 } catch {
     Show-InfoC "Don dep gap loi: $($_.Exception.Message)" 'ActWin - Loi'
