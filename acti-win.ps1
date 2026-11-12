@@ -23,7 +23,7 @@ trim and an empty check, because a trailing newline caused
 Phone activation 2026-10-31: in phase 2, if online activation fails,
 show the online error, export the Installation ID (slmgr /dti) in
 groups of 7 in step order in a copyable textbox plus clipboard plus
-a Desktop file, then show a CID entry form that accepts a pasted
+show a CID entry form that accepts a pasted
 whole CID, strips non-digits and splits it into groups of 6, runs
 slmgr /atp, re-checks Licensed plus last-5, and shows success on a
 match. Cleanup in the finally block still runs after phone flow.
@@ -307,7 +307,6 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput) {
     for ($gi = 0; $gi -lt $iidGroups.Count; $gi++) { $iidText += "Buoc $($gi + 1): $($iidGroups[$gi])`r`n" }
     $iidText += "`r`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
     try { Set-Clipboard ($iidGroups -join ' ') } catch { }
-    try { $desk = Join-Path $env:USERPROFILE 'Desktop'; if (Test-Path $desk) { Set-Content (Join-Path $desk 'ActWin-IID.txt') $iidText -Force -Encoding UTF8 } } catch { }
     try { Set-Content (Join-Path $env:TEMP 'ActWin-IID.txt') $iidText -Force -Encoding UTF8 } catch { }
     $iidResult = Show-TextForm 'ActWin - Installation ID' 'Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID (CID) roi bam OK de nhap CID:' $iidText $true
     if ($null -eq $iidResult) { return $false }
@@ -508,7 +507,6 @@ try {
             $iidText += "`r`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
             try { Set-Clipboard ($iidGroups -join ' ') } catch { }
             try { if (Test-Path $WorkDir) { Set-Content (Join-Path $WorkDir 'IID.txt') $iidText -Force -Encoding UTF8 } } catch { }
-            try { $desk = Join-Path $env:USERPROFILE 'Desktop'; if (Test-Path $desk) { Set-Content (Join-Path $desk 'ActWin-IID.txt') $iidText -Force -Encoding UTF8 } } catch { }
             $iidResult = Show-TextForm2 'ActWin - Installation ID' 'Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID (CID) roi bam OK de nhap CID:' $iidText $true
             if ($null -ne $iidResult) {
                 $attempt = 0
