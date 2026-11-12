@@ -123,6 +123,12 @@ try {
 
     $info = Invoke-RestMethod -Uri "https://api.uupdump.net/get.php?id=$($selected.uuid)" -UseBasicParsing
     $files = $info.response.files
+    $allNames = @()
+    if ($null -ne $files) {
+        if ($files -is [System.Collections.IDictionary]) { $allNames = @($files.Keys) }
+        elseif ($null -ne $files.PSObject.Properties) { $allNames = @($files.PSObject.Properties.Name) }
+    }
+    Write-Host "UUPDump tra ve $($allNames.Count) file cho ban $($selected.title) (uuid $($selected.uuid))."
 
     # Buoc 2: LXP tu UUPDump (Win10 moi ngon ngu, Win11 cac ngon ngu partial nhu hi-IN).
     $wantLxp = "LanguageExperiencePack.$Language.Neutral.appx"
@@ -172,6 +178,20 @@ try {
             $esdName = $prop.Name
             break
         }
+    }
+    if ($null -eq $esdEntry -and $allNames.Count -gt 0) {
+        $fbNames = @($allNames | Where-Object { $_ -like "*$Language*.esd" })
+        if ($fbNames.Count -gt 0) {
+            $esdName = $fbNames[0]
+            $esdEntry = $null
+            try { $esdEntry = $files.PSObject.Properties[$esdName].Value } catch { }
+            if ($null -eq $esdEntry -and $files -is [System.Collections.IDictionary]) { $esdEntry = $files[$esdName] }
+            if ($null -ne $esdEntry) { Write-Host "Tim thay goi ESD bang cach tim don gian: $esdName" }
+        }
+    }
+    if ($null -eq $esdEntry) {
+        $nearNames = @($allNames | Where-Object { $_ -like "*$Language*" })
+        if ($nearNames.Count -gt 0) { Write-Host "Cac file co chua $Language trong ban nay:"; foreach ($n in $nearNames) { Write-Host " - $n" } }
     }
     if ($null -ne $esdEntry) {
         $outFile = Join-Path $env:TEMP $esdName

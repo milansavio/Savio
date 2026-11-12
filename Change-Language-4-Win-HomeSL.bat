@@ -242,10 +242,12 @@ echo.
 echo Tai tu Windows Update khong thanh cong - Ban co muon tai ve tu UUPDump? (Y/N)
 set "UUPCHOICE="
 set /p UUPCHOICE="Nhap lua chon (Y/N): "
-if /i not "%UUPCHOICE%"=="Y" (
-    echo [LOI] Ban da huy tai tu UUPDump. Khong cai dat duoc goi ngon ngu %LANG_CODE%.
-    exit /b 1
-)
+set "UUPCHOICE=%UUPCHOICE: =%"
+if /i "%UUPCHOICE%"=="Y" goto :UUP_YES
+if /i "%UUPCHOICE%"=="YES" goto :UUP_YES
+echo [LOI] Ban da huy tai tu UUPDump. Khong cai dat duoc goi ngon ngu %LANG_CODE%.
+exit /b 1
+:UUP_YES
 call :FALLBACK_UUPDUMP
 if %errorlevel% == 0 exit /b 0
 if %errorlevel% == 2 exit /b 2
