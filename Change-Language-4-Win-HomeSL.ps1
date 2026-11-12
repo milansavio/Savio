@@ -29,6 +29,6 @@ $rand = [Guid]::NewGuid().Guid
 $FilePath = "$env:USERPROFILE\AppData\Local\Temp\changelang_$rand.bat"
 Set-Content -Path $FilePath -Value $response.Content
 # Thuc thi file batch
-Start-Process -FilePath "cmd.exe" -ArgumentList "/c `"$FilePath`"" -Wait
+Start-Process -FilePath "cmd.exe" -ArgumentList "/k `"$FilePath`"" -Wait
 # Xoa file tam sau khi thuc thi
 Remove-Item -Path $FilePath -Force

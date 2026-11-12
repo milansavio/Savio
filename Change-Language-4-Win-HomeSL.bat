@@ -113,6 +113,7 @@ echo =======================================================
 echo  TIEN TRINH DANG DUOC THUC THI - DUNG TAT TOOLS NGANG
 echo =======================================================
 echo Ngon ngu dich: %LANG_CODE% (Cai dat day du)
+echo %DATE% %TIME% - Bat dau cai %LANG_CODE% >> "%CHANGELOG%"
 echo.
 echo [Buoc 0] Dang kiem tra va tam mo Windows Update de tai goi (neu dang pause)...
 call :PAUSE_LIFT
@@ -140,6 +141,7 @@ echo =======================================================
 echo  TIEN TRINH DANG DUOC THUC THI - DUNG TAT TOOLS NGANG
 echo =======================================================
 echo Ngon ngu dich: %LANG_CODE% (Chi ngon ngu hien thi)
+echo %DATE% %TIME% - Bat dau cai %LANG_CODE% >> "%CHANGELOG%"
 echo.
 echo [Buoc 0] Dang kiem tra va tam mo Windows Update de tai goi (neu dang pause)...
 call :PAUSE_LIFT
@@ -166,6 +168,7 @@ echo =======================================================
 echo  TIEN TRINH DANG DUOC THUC THI - DUNG TAT TOOLS NGANG
 echo =======================================================
 echo Ngon ngu dich: %LANG_CODE% (Chi bo go ban phim)
+echo %DATE% %TIME% - Bat dau cai %LANG_CODE% >> "%CHANGELOG%"
 echo.
 echo [Buoc 0] Dang kiem tra va tam mo Windows Update de tai goi (neu dang pause)...
 call :PAUSE_LIFT
@@ -284,6 +287,8 @@ exit /b 0
 :: Chi them vao cuoi danh sach thi en-US van dung dau va giao dien van tieng Anh.
 :: ==========================================
 :APPLY_DISPLAY
+if not defined CHANGELOG set "CHANGELOG=%USERPROFILE%\Desktop\ChangeLang-Log.txt"
+echo %DATE% %TIME% - APPLY_DISPLAY bat dau, ngon ngu %LANG_CODE% >> "%CHANGELOG%"
 echo.
 set "IS_LIP=0"
 if /i "%LANG_CODE%"=="vi-VN" set "IS_LIP=1"
@@ -322,10 +327,13 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "Remove-Item -Recurse -Fo
 echo [Kiem tra] Dang xac nhan cac lop hien thi sau khi ap dung...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$list = Get-WinUserLanguageList; $first = $list[0].LanguageTag; $ovr = Get-WinUILanguageOverride; $sys = Get-SystemPreferredUILanguage; $fp = ($first -split '-')[0]; $op = ($ovr -split '-')[0]; $sp = ($sys -split '-')[0]; $tp = ('%LANG_CODE%' -split '-')[0]; $lp = Get-InstalledLanguage -Language %LANG_CODE% -ErrorAction SilentlyContinue; $hasLp = ($null -ne $lp -and (($lp.LanguagePacks -join ' ') -match 'LpCab|LXP')); Write-Host ('[Kiem tra] Goi hien thi: ' + $(if ($hasLp) { 'DA CAI' } else { 'CHUA CO' })); Write-Host ('[Kiem tra] Ngon ngu dau danh sach User: ' + $first); Write-Host ('[Kiem tra] WinUI Override: ' + $ovr); Write-Host ('[Kiem tra] System Preferred UI: ' + $sys); if (($fp -eq $tp) -and ($op -eq $tp) -and ($sp -eq $tp)) { Write-Host ('[Kiem tra] OK - Sau khi khoi dong lai, giao dien se hien thi bang %LANG_CODE%.') } else { Write-Host '[CANH BAO] Cac lop hien thi chua khop het - giao dien co the van hien thi ngon ngu cu sau khi khoi dong lai, hay kiem tra lai trong Settings.' }"
 echo.
+echo %DATE% %TIME% - Buoc 9 bat dau, tao tac vu giu ngon ngu >> "%CHANGELOG%"
 call :CREATE_LANGLOCK_TASK
 echo [Buoc 9] Da xong tac vu giu ngon ngu.
+echo %DATE% %TIME% - Buoc 10 bat dau, go ngon ngu khac >> "%CHANGELOG%"
 call :REMOVE_OTHER_LANGS
 echo [Buoc 10] Da xong buoc go ngon ngu khac.
+echo %DATE% %TIME% - Buoc 10 xong, APPLY_DISPLAY hoan tat >> "%CHANGELOG%"
 exit /b 0
 
 :: ==========================================
