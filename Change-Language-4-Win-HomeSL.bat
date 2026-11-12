@@ -122,9 +122,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Install-Language -
 call :PAUSE_RESTORE
 call :CHECK_LPCAB
 if %errorlevel% neq 0 (
+    echo.
+    echo [CANH BAO] Chua xac nhan duoc goi ngon ngu %LANG_CODE% da cai dat, nhung van chay tiep lenh set ngon ngu theo yeu cau.
     call :PAUSE_RESTORE
-    pause >nul
-    goto :MENU_LANG
 )
 
 call :APPLY_DISPLAY
@@ -148,9 +148,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Install-Language -
 call :PAUSE_RESTORE
 call :CHECK_LPCAB
 if %errorlevel% neq 0 (
+    echo.
+    echo [CANH BAO] Chua xac nhan duoc goi ngon ngu %LANG_CODE% da cai dat, nhung van chay tiep lenh set ngon ngu theo yeu cau.
     call :PAUSE_RESTORE
-    pause >nul
-    goto :MENU_LANG
 )
 
 call :APPLY_DISPLAY
@@ -323,7 +323,9 @@ echo [Kiem tra] Dang xac nhan cac lop hien thi sau khi ap dung...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "$list = Get-WinUserLanguageList; $first = $list[0].LanguageTag; $ovr = Get-WinUILanguageOverride; $sys = Get-SystemPreferredUILanguage; $fp = ($first -split '-')[0]; $op = ($ovr -split '-')[0]; $sp = ($sys -split '-')[0]; $tp = ('%LANG_CODE%' -split '-')[0]; $lp = Get-InstalledLanguage -Language %LANG_CODE% -ErrorAction SilentlyContinue; $hasLp = ($null -ne $lp -and (($lp.LanguagePacks -join ' ') -match 'LpCab|LXP')); Write-Host ('[Kiem tra] Goi hien thi: ' + $(if ($hasLp) { 'DA CAI' } else { 'CHUA CO' })); Write-Host ('[Kiem tra] Ngon ngu dau danh sach User: ' + $first); Write-Host ('[Kiem tra] WinUI Override: ' + $ovr); Write-Host ('[Kiem tra] System Preferred UI: ' + $sys); if (($fp -eq $tp) -and ($op -eq $tp) -and ($sp -eq $tp)) { Write-Host ('[Kiem tra] OK - Sau khi khoi dong lai, giao dien se hien thi bang %LANG_CODE%.') } else { Write-Host '[CANH BAO] Cac lop hien thi chua khop het - giao dien co the van hien thi ngon ngu cu sau khi khoi dong lai, hay kiem tra lai trong Settings.' }"
 echo.
 call :CREATE_LANGLOCK_TASK
+echo [Buoc 9] Da xong tac vu giu ngon ngu.
 call :REMOVE_OTHER_LANGS
+echo [Buoc 10] Da xong buoc go ngon ngu khac.
 exit /b 0
 
 :: ==========================================
@@ -407,7 +409,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-SystemPreferredUILan
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "InstallLanguage" /t REG_SZ /d "0409" /f >nul 2>&1
 reg add "HKLM\SYSTEM\CurrentControlSet\Control\Nls\Language" /v "Default" /t REG_SZ /d "0409" /f >nul 2>&1
 if not exist "C:\ProgramData\Savio" mkdir "C:\ProgramData\Savio" >nul 2>&1
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$keep = @('en-US', '%LANG_CODE%'); $pkgs = Get-WindowsPackage -Online; foreach ($p in $pkgs) { if ($p.PackageName -match 'LanguagePack') { $m = [regex]::Match($p.PackageName, '~([a-z]{2}-[A-Z]{2})~'); if ($m.Success) { $tag = $m.Groups[1].Value; if ($keep -notcontains $tag) { Write-Host ('Dang go goi ngon ngu: ' + $tag); Remove-WindowsPackage -Online -PackageName $p.PackageName -NoRestart -ErrorAction SilentlyContinue } } } }"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$keep = @('en-US', '%LANG_CODE%'); $pkgs = Get-WindowsPackage -Online; foreach ($p in $pkgs) { if ($p.PackageName -match 'LanguagePack') { $m = [regex]::Match($p.PackageName, '~([a-z]{2}-[A-Z]{2})~'); if ($m.Success) { $tag = $m.Groups[1].Value; if ($keep -notcontains $tag) { Write-Host ('Dang go goi ngon ngu: ' + $tag); Remove-WindowsPackage -Online -PackageName $p.PackageName -NoRestart -ErrorAction SilentlyContinue } } } }" || echo [CANH BAO] Lenh go goi ngon ngu gap loi, van tiep tuc ap dung ngon ngu.
 echo Da go xong cac goi ngon ngu khac.
 echo [Buoc 10] Dang ap dung lai ngon ngu %LANG_CODE% sau khi go...
 powershell -NoProfile -ExecutionPolicy Bypass -Command "Set-SystemPreferredUILanguage -Language %LANG_CODE%" >nul 2>&1
