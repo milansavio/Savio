@@ -81,7 +81,7 @@ $KeyFile  = Join-Path $WorkDir 'key.txt'
 $Phase2File = Join-Path $WorkDir 'acti-win-phase2.ps1'
 $CleanupFile = Join-Path $WorkDir 'acti-win-cleanup.ps1'
 $GenericProKey = 'VK7JG-NPHTM-C97JM-9MPGT-3V66T'
-$RawUrl = 'https://raw.githubusercontent.com/milansavio/Savio/main/acti-win.ps1'
+$RawUrl = 'https://raw.githubusercontent.com/milansavio/Savio/milansavio-Savio/acti-win.ps1'
 
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
