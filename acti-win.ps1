@@ -1,4 +1,4 @@
-<#
+﻿<#
 acti-win.ps1 - Windows 10/11 Home -> Pro, legitimate edition upgrade.
 This script only activates Windows with a product key the user owns
 and types in at runtime. The key is never written to this file, never
@@ -59,6 +59,12 @@ IID progress line 2026-10-31: before slmgr /dti in both inline and
 phase 2, print "Dang lay Installation ID (IID), vui long doi..." to
 the console, so the user knows the script is still running while
 the IID board is being prepared.
+Test T3 BatchActivation 2026-11-13: khi kich hoat online (/ato) khong
+thanh cong, tool tu dong goi SOAP truc tiep toi may chu BatchActivation
+cua Microsoft (BatchActivation.asmx) voi IID va Extended PID de lay CID
+tu dong ma khong can CAPTCHA hay dang nhap. Neu lay duoc CID, tool tu
+kich hoat va bao thanh cong. Neu that bai (key bi chan, 0x67, 0x86, ...),
+tool se ghi ro ma loi va tu dong chuyen sang portal thu cong aka.ms/aoh.
 Choice 1 flow: key prompt -> if already Pro, activate now -> otherwise
 create a logon task for phase 2, upgrade the edition with Microsoft's
 public generic Pro upgrade key, Windows reboots itself, phase 2 installs the user's key
@@ -287,6 +293,59 @@ function Show-TextForm($Title, $Prompt, $InitialText, $ReadOnly) {
         try { return [Microsoft.VisualBasic.Interaction]::InputBox($Prompt, $Title, $InitialText) } catch { return $null }
     }
 }
+function Get-CidFromBatchActivation($IidDigits, $ExtendedPid) {
+    try {
+        $macKey = [byte[]](254,49,152,117,251,72,132,134,156,243,241,206,153,168,144,100,
+                           171,87,31,202,71,4,80,88,48,36,226,20,98,135,121,160) + (,0)*32
+        $inner = '<ActivationRequest xmlns="http://www.microsoft.com/DRM/SL/BatchActivationRequest/1.0">' +
+                 '<VersionNumber>2.0</VersionNumber><RequestType>1</RequestType><Requests><Request>' +
+                 '<PID>' + $ExtendedPid + '</PID><IID>' + $IidDigits + '</IID>' +
+                 '</Request></Requests></ActivationRequest>'
+        $bytes = [System.Text.Encoding]::Unicode.GetBytes($inner)
+        $hmac = [System.Security.Cryptography.HMACSHA256]::new($macKey)
+        $digest = [Convert]::ToBase64String($hmac.ComputeHash($bytes))
+        $requestXml = [Convert]::ToBase64String($bytes)
+        $soap = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>' +
+                '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" ' +
+                'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ' +
+                'xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
+                '<soap:Body><BatchActivate xmlns="http://www.microsoft.com/BatchActivationService"><request>' +
+                '<Digest>' + $digest + '</Digest><RequestXml>' + $requestXml + '</RequestXml>' +
+                '</request></BatchActivate></soap:Body></soap:Envelope>'
+
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+        $resp = Invoke-WebRequest -Uri 'https://activation.sls.microsoft.com/BatchActivation/BatchActivation.asmx' `
+            -Method Post -ContentType 'text/xml; charset=utf-8' `
+            -Headers @{
+                SOAPAction   = 'http://www.microsoft.com/BatchActivationService/BatchActivate'
+                'User-Agent' = 'ActivationWs/1.0'
+            } `
+            -Body $soap -UseBasicParsing -TimeoutSec 30
+
+        $content = $resp.Content
+        if ($content -match '(?:&lt;|<)CID(?:&gt;|>)([\d\s-]+)(?:&lt;|<)/CID(?:&gt;|>)') {
+            $cidDigits = ($Matches[1] -replace '\D','')
+            if ($cidDigits.Length -ge 40) {
+                return @{ Ok = $true; CID = $cidDigits }
+            }
+        }
+        if ($content -match '(?:&lt;|<)ErrorCode(?:&gt;|>)([^&<]+)(?:&lt;|<)/ErrorCode(?:&gt;|>)') {
+            $errCode = $Matches[1].Trim()
+            $desc = switch ($errCode) {
+                '0x7F' { 'The Multiple Activation Key has exceeded its limit (0x7F).' }
+                '0x67' { 'The product key has been blocked (0x67).' }
+                '0x68' { 'Invalid product key (0x68).' }
+                '0x86' { 'Invalid key type for BatchActivation (0x86).' }
+                '0x90' { 'Please check the Installation ID and try again (0x90).' }
+                Default { "BatchActivation ErrorCode: $errCode" }
+            }
+            return @{ Ok = $false; Error = $desc; Code = $errCode }
+        }
+        return @{ Ok = $false; Error = "Khong tim thay CID hoac ErrorCode trong phan hoi SOAP cua Microsoft: $content" }
+    } catch {
+        return @{ Ok = $false; Error = $_.Exception.Message }
+    }
+}
 function Invoke-PhoneActivation($Last5, $ErrorOutput) {
     $errText = $ErrorOutput
     if ($errText.Length -gt 1500) { $errText = $errText.Substring(0, 1500) }
@@ -300,6 +359,42 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput) {
     if ($iidDigits.Length -lt 20) {
         Show-Info "Khong lay duoc Installation ID tu he thong. Loi online truoc do:`n$errText" 'ActWin - Khong lay duoc IID'
         return $false
+    }
+
+    # --- Test T3: Thu tu dong lay CID qua BatchActivation cua Microsoft ---
+    $dlvOut = Invoke-Slmgr @('/dlv')
+    $extPid = if ($dlvOut -match 'Extended PID:\s*(\S+)') { $Matches[1].Trim() } else { $null }
+    if ($extPid) {
+        Write-Host 'Dang thu tu dong lay CID qua may chu Microsoft (BatchActivation)...'
+        $autoNotice = Start-ActivatingNotice 'Dang thu tu dong lay CID qua may chu Microsoft, vui long doi...'
+        $batchResult = Get-CidFromBatchActivation -IidDigits $iidDigits -ExtendedPid $extPid
+        Stop-ActivatingNotice $autoNotice
+        if ($batchResult.Ok -and $batchResult.CID) {
+            $autoCid = $batchResult.CID
+            Write-Host "Da lay CID tu dong thanh cong: $autoCid. Dang tien hanh kich hoat..."
+            $atpOut = Invoke-Slmgr @('/atp', $autoCid)
+            $phoneNotice = Start-ActivatingNotice 'Dang kich hoat bang CID tu dong, vui long doi...'
+            $phoneDeadline = (Get-Date).AddSeconds(30)
+            $phoneOk = $false
+            $phoneCheck = 0
+            while ((Get-Date) -lt $phoneDeadline) {
+                $phoneCheck++
+                Write-Host "Dang kiem tra kich hoat, vui long doi... (lan $phoneCheck)"
+                if (Test-Activated $Last5) { $phoneOk = $true; break }
+                Start-Sleep -Seconds 5
+            }
+            Stop-ActivatingNotice $phoneNotice
+            if ($phoneOk) {
+                $cidGroups = @()
+                for ($ci = 0; $ci -lt $autoCid.Length; $ci += 6) { $cidGroups += $autoCid.Substring($ci, [Math]::Min(6, $autoCid.Length - $ci)) }
+                Show-Info "Da tu dong lay CID va kich hoat thanh cong Windows Pro qua may chu Microsoft!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $Last5" 'ActWin - Thanh cong'
+                return $true
+            } else {
+                Write-Host "Kich hoat bang CID tu dong chua thanh cong: $atpOut"
+            }
+        } else {
+            Write-Host "Tu dong lay CID khong thanh cong: $($batchResult.Error)"
+        }
     }
     $iidGroups = @()
     for ($gi = 0; $gi -lt $iidDigits.Length; $gi += 7) { $iidGroups += $iidDigits.Substring($gi, [Math]::Min(7, $iidDigits.Length - $gi)) }
@@ -456,6 +551,57 @@ function Start-Notice2($NoticeText = 'Dang kich hoat, vui long doi...') {
 function Stop-Notice2($Proc) {
     try { if ($Proc -and -not $Proc.HasExited) { Stop-Process -Id $Proc.Id -Force -ErrorAction SilentlyContinue } } catch { }
 }
+function Get-CidFromBatchActivation2($IidDigits, $ExtendedPid) {
+    try {
+        $macKey = [byte[]](254,49,152,117,251,72,132,134,156,243,241,206,153,168,144,100,
+                           171,87,31,202,71,4,80,88,48,36,226,20,98,135,121,160) + (,0)*32
+        $inner = '<ActivationRequest xmlns="http://www.microsoft.com/DRM/SL/BatchActivationRequest/1.0">' +
+                 '<VersionNumber>2.0</VersionNumber><RequestType>1</RequestType><Requests><Request>' +
+                 '<PID>' + $ExtendedPid + '</PID><IID>' + $IidDigits + '</IID>' +
+                 '</Request></Requests></ActivationRequest>'
+        $bytes = [System.Text.Encoding]::Unicode.GetBytes($inner)
+        $hmac = [System.Security.Cryptography.HMACSHA256]::new($macKey)
+        $digest = [Convert]::ToBase64String($hmac.ComputeHash($bytes))
+        $requestXml = [Convert]::ToBase64String($bytes)
+        $soap = '<?xml version="1.0" encoding="UTF-8" standalone="no"?>' +
+                '<soap:Envelope xmlns:soap="http://schemas.xmlsoap.org/soap/envelope/" ' +
+                'xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" ' +
+                'xmlns:xsd="http://www.w3.org/2001/XMLSchema">' +
+                '<soap:Body><BatchActivate xmlns="http://www.microsoft.com/BatchActivationService"><request>' +
+                '<Digest>' + $digest + '</Digest><RequestXml>' + $requestXml + '</RequestXml>' +
+                '</request></BatchActivate></soap:Body></soap:Envelope>'
+
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+        $resp = Invoke-WebRequest -Uri 'https://activation.sls.microsoft.com/BatchActivation/BatchActivation.asmx' `
+            -Method Post -ContentType 'text/xml; charset=utf-8' `
+            -Headers @{
+                SOAPAction   = 'http://www.microsoft.com/BatchActivationService/BatchActivate'
+                'User-Agent' = 'ActivationWs/1.0'
+            } `
+            -Body $soap -UseBasicParsing -TimeoutSec 30
+
+        $content = $resp.Content
+        if ($content -match '(?:&lt;|<)CID(?:&gt;|>)([\d\s-]+)(?:&lt;|<)/CID(?:&gt;|>)') {
+            $cidDigits = ($Matches[1] -replace '\D','')
+            if ($cidDigits.Length -ge 40) { return @{ Ok = $true; CID = $cidDigits } }
+        }
+        if ($content -match '(?:&lt;|<)ErrorCode(?:&gt;|>)([^&<]+)(?:&lt;|<)/ErrorCode(?:&gt;|>)') {
+            $errCode = $Matches[1].Trim()
+            $desc = switch ($errCode) {
+                '0x7F' { 'The Multiple Activation Key has exceeded its limit (0x7F).' }
+                '0x67' { 'The product key has been blocked (0x67).' }
+                '0x68' { 'Invalid product key (0x68).' }
+                '0x86' { 'Invalid key type for BatchActivation (0x86).' }
+                '0x90' { 'Please check the Installation ID and try again (0x90).' }
+                Default { "BatchActivation ErrorCode: $errCode" }
+            }
+            return @{ Ok = $false; Error = $desc; Code = $errCode }
+        }
+        return @{ Ok = $false; Error = "Khong tim thay CID hoac ErrorCode trong ket qua tra ve: $content" }
+    } catch {
+        return @{ Ok = $false; Error = $_.Exception.Message }
+    }
+}
 try {
     if (-not (Test-Path $KeyFile)) { throw 'Khong tim thay file key da ma hoa. Hay chay lai acti-win.ps1 va nhap key.' }
     $enc = (Get-Content $KeyFile -Raw).Trim()
@@ -500,48 +646,86 @@ try {
         $iidDigits = ($dtiLine -replace '[^0-9]', '')
         if ($iidDigits.Length -lt 20) { $iidDigits = ($dtiOut -replace '[^0-9]', '') }
         if ($iidDigits.Length -ge 20) {
-            $iidGroups = @()
-            for ($gi = 0; $gi -lt $iidDigits.Length; $gi += 7) { $iidGroups += $iidDigits.Substring($gi, [Math]::Min(7, $iidDigits.Length - $gi)) }
-            $iidText = "Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID`r`n`r`n"
-            for ($gi = 0; $gi -lt $iidGroups.Count; $gi++) { $iidText += "Buoc $($gi + 1): $($iidGroups[$gi])`r`n" }
-            $iidText += "`r`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
-            try { Set-Clipboard ($iidGroups -join ' ') } catch { }
-            try { if (Test-Path $WorkDir) { Set-Content (Join-Path $WorkDir 'IID.txt') $iidText -Force -Encoding UTF8 } } catch { }
-            $iidResult = Show-TextForm2 'ActWin - Installation ID' 'Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID (CID) roi bam OK de nhap CID:' $iidText $true
-            if ($null -ne $iidResult) {
-                $attempt = 0
-                while ($attempt -lt 5 -and -not $ok) {
-                    $attempt++
-                    $cidInput = Show-TextForm2 'ActWin - Nhap Confirmation ID (CID)' 'Paste toan bo CID vao day (co the co khoang trang, gach ngang, xuong dong). Script se tu bo ky tu thua va tu chia lai thanh tung nhom 6 chu so:' '' $false
-                    if ($null -eq $cidInput) { break }
-                    $cidDigits = ($cidInput -replace '[^0-9]', '')
-                    if ($cidDigits.Length -lt 40) {
-                        Show-Info2 "CID vua nhap chi co $($cidDigits.Length) chu so, thuong la 48 chu so. Hay kiem tra lai va nhap lai." 'ActWin - CID chua hop le'
-                        continue
-                    }
-                    $cidGroups = @()
-                    for ($ci = 0; $ci -lt $cidDigits.Length; $ci += 6) { $cidGroups += $cidDigits.Substring($ci, [Math]::Min(6, $cidDigits.Length - $ci)) }
-                    $atpOut = (& cscript.exe //Nologo $slmgr /atp $cidDigits 2>&1 | Out-String)
-                    Write-Host 'Dang kich hoat qua Phone, vui long doi...'
-                    $noticePhone = Start-Notice2 'Dang kich hoat qua Phone, vui long doi...'
-                    $phoneDeadline = (Get-Date).AddSeconds(30)
-                    while ((Get-Date) -lt $phoneDeadline) {
-                        $prods2 = Get-CimInstance -ClassName SoftwareLicensingProduct -ErrorAction SilentlyContinue |
+            # --- Test T3: Thu tu dong lay CID qua BatchActivation cua Microsoft ---
+            $dlvOut = (& cscript.exe //Nologo $slmgr /dlv 2>&1 | Out-String)
+            $extPid = if ($dlvOut -match 'Extended PID:\s*(\S+)') { $Matches[1].Trim() } else { $null }
+            if ($extPid) {
+                Write-Host 'Dang thu tu dong lay CID tu server Microsoft (BatchActivation)...'
+                $noticeAuto2 = Start-Notice2 'Dang thu tu dong lay CID qua may chu Microsoft, vui long doi...'
+                $batchResult2 = Get-CidFromBatchActivation2 $iidDigits $extPid
+                Stop-Notice2 $noticeAuto2
+                if ($batchResult2.Ok -and $batchResult2.CID) {
+                    $autoCid2 = $batchResult2.CID
+                    Write-Host "Da lay CID tu dong thanh cong: $autoCid2. Dang kich hoat..."
+                    $atpOut2 = (& cscript.exe //Nologo $slmgr /atp $autoCid2 2>&1 | Out-String)
+                    $noticePhone2 = Start-Notice2 'Dang kich hoat qua CID tu dong, vui long doi...'
+                    $phoneDeadline2 = (Get-Date).AddSeconds(30)
+                    $phoneCheck2 = 0
+                    while ((Get-Date) -lt $phoneDeadline2) {
+                        $phoneCheck2++
+                        Write-Host "Dang kiem tra kich hoat, vui long doi... (lan $phoneCheck2)"
+                        $prods2 = Get-CimInstance SoftwareLicensingProduct -ErrorAction SilentlyContinue |
                             Where-Object { $_.PartialProductKey -and $_.LicenseStatus -eq 1 }
                         foreach ($p2 in $prods2) { if ($p2.PartialProductKey -eq $last5) { $ok = $true; break } }
                         if ($ok) { break }
                         Start-Sleep -Seconds 5
                     }
-                    Stop-Notice2 $noticePhone
+                    Stop-Notice2 $noticePhone2
                     if ($ok) {
-                        Show-Info2 "Da kich hoat thanh cong Windows Pro bang Confirmation ID.`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
+                        $cidGroups = @()
+                        for ($ci = 0; $ci -lt $autoCid2.Length; $ci += 6) { $cidGroups += $autoCid2.Substring($ci, [Math]::Min(6, $autoCid2.Length - $ci)) }
+                        Show-Info2 "Da tu dong lay CID va kich hoat thanh cong Windows Pro qua may chu Microsoft!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
                     } else {
-                        $atpText = $atpOut
-                        if ($atpText.Length -gt 1200) { $atpText = $atpText.Substring(0, 1200) }
-                        Show-Info2 "Kich hoat bang CID chua thanh cong. Loi tu he thong:`n$atpText`nHay kiem tra lai CID va nhap lai." 'ActWin - CID chua thanh cong'
+                        Write-Host "Kich hoat bang CID tu dong chua thanh cong: $atpOut2"
                     }
+                } else {
+                    Write-Host "Tu dong lay CID khong thanh cong: $($batchResult2.Error)"
                 }
-                if (-not $ok) { Show-Info2 'Da dung kich hoat bang dien thoai. May van la Pro nhung chua kich hoat, hay chay lai acti-win.ps1 khi co CID dung.' 'ActWin - Chua kich hoat' }
+            }
+            if (-not $ok) {
+                $iidGroups = @()
+                for ($gi = 0; $gi -lt $iidDigits.Length; $gi += 7) { $iidGroups += $iidDigits.Substring($gi, [Math]::Min(7, $iidDigits.Length - $gi)) }
+                $iidText = "Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID`r`n`r`n"
+                for ($gi = 0; $gi -lt $iidGroups.Count; $gi++) { $iidText += "Buoc $($gi + 1): $($iidGroups[$gi])`r`n" }
+                $iidText += "`r`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
+                try { Set-Clipboard ($iidGroups -join ' ') } catch { }
+                try { if (Test-Path $WorkDir) { Set-Content (Join-Path $WorkDir 'IID.txt') $iidText -Force -Encoding UTF8 } } catch { }
+                $iidResult = Show-TextForm2 'ActWin - Installation ID' 'Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID (CID) roi bam OK de nhap CID:' $iidText $true
+                if ($null -ne $iidResult) {
+                    $attempt = 0
+                    while ($attempt -lt 5 -and -not $ok) {
+                        $attempt++
+                        $cidInput = Show-TextForm2 'ActWin - Nhap Confirmation ID (CID)' 'Paste toan bo CID vao day (co the co khoang trang, gach ngang, xuong dong). Script se tu bo ky tu thua va tu chia lai thanh tung nhom 6 chu so:' '' $false
+                        if ($null -eq $cidInput) { break }
+                        $cidDigits = ($cidInput -replace '[^0-9]', '')
+                        if ($cidDigits.Length -lt 40) {
+                            Show-Info2 "CID vua nhap chi co $($cidDigits.Length) chu so, thuong la 48 chu so. Hay kiem tra lai va nhap lai." 'ActWin - CID chua hop le'
+                            continue
+                        }
+                        $cidGroups = @()
+                        for ($ci = 0; $ci -lt $cidDigits.Length; $ci += 6) { $cidGroups += $cidDigits.Substring($ci, [Math]::Min(6, $cidDigits.Length - $ci)) }
+                        $atpOut = (& cscript.exe //Nologo $slmgr /atp $cidDigits 2>&1 | Out-String)
+                        Write-Host 'Dang kich hoat qua Phone, vui long doi...'
+                        $noticePhone = Start-Notice2 'Dang kich hoat qua Phone, vui long doi...'
+                        $phoneDeadline = (Get-Date).AddSeconds(30)
+                        while ((Get-Date) -lt $phoneDeadline) {
+                            $prods2 = Get-CimInstance SoftwareLicensingProduct -ErrorAction SilentlyContinue |
+                                Where-Object { $_.PartialProductKey -and $_.LicenseStatus -eq 1 }
+                            foreach ($p2 in $prods2) { if ($p2.PartialProductKey -eq $last5) { $ok = $true; break } }
+                            if ($ok) { break }
+                            Start-Sleep -Seconds 5
+                        }
+                        Stop-Notice2 $noticePhone
+                        if ($ok) {
+                            Show-Info2 "Da kich hoat thanh cong Windows Pro bang Confirmation ID.`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
+                        } else {
+                            $atpText = $atpOut
+                            if ($atpText.Length -gt 1200) { $atpText = $atpText.Substring(0, 1200) }
+                            Show-Info2 "Kich hoat bang CID chua thanh cong. Loi tu he thong:`n$atpText`nHay kiem tra lai CID va nhap lai." 'ActWin - CID chua thanh cong'
+                        }
+                    }
+                    if (-not $ok) { Show-Info2 'Da dung kich hoat bang dien thoai. May van la Pro nhung chua kich hoat, hay chay lai acti-win.ps1 khi co CID dung.' 'ActWin - Chua kich hoat' }
+                }
             }
         } else {
             Show-Info2 "Khong lay duoc Installation ID tu he thong. Loi online truoc do:`n$errText" 'ActWin - Khong lay duoc IID'
