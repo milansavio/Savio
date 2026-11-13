@@ -1,4 +1,4 @@
-﻿<#
+<#
 acti-win.ps1 - Windows 10/11 Home -> Pro, legitimate edition upgrade.
 This script only activates Windows with a product key the user owns
 and types in at runtime. The key is never written to this file, never
