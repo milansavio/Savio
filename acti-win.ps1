@@ -1,4 +1,4 @@
-<#
+﻿<#
 acti-win.ps1 - Windows 10/11 Home -> Pro, legitimate edition upgrade.
 This script only activates Windows with a product key the user owns
 and types in at runtime. The key is never written to this file, never
@@ -332,11 +332,13 @@ function Get-CidFromBatchActivation($IidDigits, $ExtendedPid) {
         if ($content -match '(?:&lt;|<)ErrorCode(?:&gt;|>)([^&<]+)(?:&lt;|<)/ErrorCode(?:&gt;|>)') {
             $errCode = $Matches[1].Trim()
             $desc = switch ($errCode) {
-                '0x7F' { 'The Multiple Activation Key has exceeded its limit (0x7F).' }
-                '0x67' { 'The product key has been blocked (0x67).' }
-                '0x68' { 'Invalid product key (0x68).' }
-                '0x86' { 'Invalid key type for BatchActivation (0x86).' }
-                '0x90' { 'Please check the Installation ID and try again (0x90).' }
+                '0x71' { 'The key has exceeded its activation limit (0x71 - Key da het luot tu kich hoat, can lay CID qua aka.ms/aoh).' }
+                '0x7F' { 'The Multiple Activation Key has exceeded its limit (0x7F - MAK het luot).' }
+                '0x67' { 'The product key has been blocked (0x67 - Key bi khoa/chan).' }
+                '0x68' { 'Invalid product key (0x68 - Key khong hop le).' }
+                '0x86' { 'Invalid key type for BatchActivation (0x86 - Loai key khong ho tro BatchActivation).' }
+                '0x90' { 'Please check the Installation ID and try again (0x90 - IID chua dung).' }
+                '0xD5' { 'ROT activation override limit reached (0xD5).' }
                 Default { "BatchActivation ErrorCode: $errCode" }
             }
             return @{ Ok = $false; Error = $desc; Code = $errCode }
@@ -588,11 +590,13 @@ function Get-CidFromBatchActivation2($IidDigits, $ExtendedPid) {
         if ($content -match '(?:&lt;|<)ErrorCode(?:&gt;|>)([^&<]+)(?:&lt;|<)/ErrorCode(?:&gt;|>)') {
             $errCode = $Matches[1].Trim()
             $desc = switch ($errCode) {
-                '0x7F' { 'The Multiple Activation Key has exceeded its limit (0x7F).' }
-                '0x67' { 'The product key has been blocked (0x67).' }
-                '0x68' { 'Invalid product key (0x68).' }
-                '0x86' { 'Invalid key type for BatchActivation (0x86).' }
-                '0x90' { 'Please check the Installation ID and try again (0x90).' }
+                '0x71' { 'The key has exceeded its activation limit (0x71 - Key da het luot tu kich hoat, can lay CID qua aka.ms/aoh).' }
+                '0x7F' { 'The Multiple Activation Key has exceeded its limit (0x7F - MAK het luot).' }
+                '0x67' { 'The product key has been blocked (0x67 - Key bi khoa/chan).' }
+                '0x68' { 'Invalid product key (0x68 - Key khong hop le).' }
+                '0x86' { 'Invalid key type for BatchActivation (0x86 - Loai key khong ho tro BatchActivation).' }
+                '0x90' { 'Please check the Installation ID and try again (0x90 - IID chua dung).' }
+                '0xD5' { 'ROT activation override limit reached (0xD5).' }
                 Default { "BatchActivation ErrorCode: $errCode" }
             }
             return @{ Ok = $false; Error = $desc; Code = $errCode }
