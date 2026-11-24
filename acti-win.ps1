@@ -508,7 +508,60 @@ function Get-CidFromVisualSupport($IidDigits) {
         return @{ Ok = $false; Error = $_.Exception.Message }
     }
 }
-function Invoke-PhoneActivation($Last5, $ErrorOutput) {
+function Invoke-ConvertToDigitalLicense($ProductKey) {
+    if ([string]::IsNullOrWhiteSpace($ProductKey)) { return }
+    Write-Host 'Dang tu dong nhap de key qua Modern Activation de chuyen doi sang Ban quyen ky thuat so (Digital License)...'
+    $dNotice = Start-ActivatingNotice 'Dang chuyen doi sang Ban quyen ky thuat so (Digital License), vui long doi...'
+    try { Start-Service ClipSVC -ErrorAction SilentlyContinue } catch { }
+    try { Start-Service LicenseManager -ErrorAction SilentlyContinue } catch { }
+    try { Start-Service sppsvc -ErrorAction SilentlyContinue } catch { }
+    $cpkProc = $null
+    try {
+        $pInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pInfo.FileName = Join-Path $env:SystemRoot 'System32\changepk.exe'
+        $pInfo.Arguments = "/ProductKey $ProductKey /NoUI /NoReboot"
+        $pInfo.UseShellExecute = $false
+        $pInfo.CreateNoWindow = $true
+        $cpkProc = [System.Diagnostics.Process]::Start($pInfo)
+    } catch {
+        $cpkProc = Start-Process changepk.exe -ArgumentList "/ProductKey $ProductKey /NoUI /NoReboot" -PassThru -ErrorAction SilentlyContinue
+    }
+    $wsh = $null
+    try { $wsh = New-Object -ComObject WScript.Shell } catch { }
+    $deadline = (Get-Date).AddSeconds(25)
+    while ((Get-Date) -lt $deadline) {
+        if ($cpkProc -and $cpkProc.HasExited) { break }
+        if ($wsh) {
+            $procs = Get-Process -Name 'changepk' -ErrorAction SilentlyContinue
+            foreach ($p in $procs) {
+                if ($p.MainWindowHandle -ne [IntPtr]::Zero) {
+                    try {
+                        $wsh.AppActivate($p.Id) | Out-Null
+                        Start-Sleep -Milliseconds 400
+                        $wsh.SendKeys('{ENTER}')
+                    } catch { }
+                }
+            }
+        }
+        Start-Sleep -Seconds 1
+    }
+    if ($wsh) {
+        $procs = Get-Process -Name 'changepk' -ErrorAction SilentlyContinue
+        foreach ($p in $procs) {
+            if ($p.MainWindowHandle -ne [IntPtr]::Zero) {
+                try {
+                    $wsh.AppActivate($p.Id) | Out-Null
+                    Start-Sleep -Milliseconds 400
+                    $wsh.SendKeys('{ENTER}')
+                } catch { }
+            }
+        }
+    }
+    Stop-ActivatingNotice $dNotice
+    Write-Host 'Da hoan tat nhap de key qua Modern Activation de ghi nhan Digital License.'
+}
+function Invoke-PhoneActivation($Last5, $ErrorOutput, $FullKey = $null) {
+    if (-not $FullKey -and $script:key) { $FullKey = $script:key }
     $errText = $ErrorOutput
     if ($errText.Length -gt 1500) { $errText = $errText.Substring(0, 1500) }
     Show-Info "Kich hoat online khong thanh cong. Loi tu he thong:`n$errText`nBay gio se chuyen sang kich hoat bang dien thoai (phone activation)." 'ActWin - Chua kich hoat online'
@@ -574,7 +627,8 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput) {
         if ($phoneOk) {
             $cidGroups = @()
             for ($ci = 0; $ci -lt $autoCid.Length; $ci += 6) { $cidGroups += $autoCid.Substring($ci, [Math]::Min(6, $autoCid.Length - $ci)) }
-            Show-Info "Da tu dong lay CID ($($cidSource)) va kich hoat thanh cong Windows Pro qua may chu Microsoft!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $Last5" 'ActWin - Thanh cong'
+            Invoke-ConvertToDigitalLicense $FullKey
+            Show-Info "Da tu dong lay CID ($($cidSource)) va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $Last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
             return $true
         } else {
             Write-Host "Kich hoat bang CID tu dong chua thanh cong: $atpOut"
@@ -615,7 +669,8 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput) {
         }
         Stop-ActivatingNotice $phoneNotice
         if ($phoneOk) {
-            Show-Info "Da kich hoat thanh cong Windows Pro bang Confirmation ID.`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $Last5" 'ActWin - Thanh cong'
+            Invoke-ConvertToDigitalLicense $FullKey
+            Show-Info "Da kich hoat bang Confirmation ID va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $Last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
             return $true
         }
         $atpText = $atpOut
@@ -948,6 +1003,58 @@ function Get-CidFromVisualSupport2($IidDigits) {
         return @{ Ok = $false; Error = $_.Exception.Message }
     }
 }
+function Invoke-ConvertToDigitalLicense2($ProductKey) {
+    if ([string]::IsNullOrWhiteSpace($ProductKey)) { return }
+    Write-Host 'Dang tu dong nhap de key qua Modern Activation de chuyen doi sang Ban quyen ky thuat so (Digital License)...'
+    $dNotice2 = Start-Notice2 'Dang chuyen doi sang Ban quyen ky thuat so (Digital License), vui long doi...'
+    try { Start-Service ClipSVC -ErrorAction SilentlyContinue } catch { }
+    try { Start-Service LicenseManager -ErrorAction SilentlyContinue } catch { }
+    try { Start-Service sppsvc -ErrorAction SilentlyContinue } catch { }
+    $cpkProc2 = $null
+    try {
+        $pInfo = New-Object System.Diagnostics.ProcessStartInfo
+        $pInfo.FileName = Join-Path $env:SystemRoot 'System32\changepk.exe'
+        $pInfo.Arguments = "/ProductKey $ProductKey /NoUI /NoReboot"
+        $pInfo.UseShellExecute = $false
+        $pInfo.CreateNoWindow = $true
+        $cpkProc2 = [System.Diagnostics.Process]::Start($pInfo)
+    } catch {
+        $cpkProc2 = Start-Process changepk.exe -ArgumentList "/ProductKey $ProductKey /NoUI /NoReboot" -PassThru -ErrorAction SilentlyContinue
+    }
+    $wsh2 = $null
+    try { $wsh2 = New-Object -ComObject WScript.Shell } catch { }
+    $deadline = (Get-Date).AddSeconds(25)
+    while ((Get-Date) -lt $deadline) {
+        if ($cpkProc2 -and $cpkProc2.HasExited) { break }
+        if ($wsh2) {
+            $procs = Get-Process -Name 'changepk' -ErrorAction SilentlyContinue
+            foreach ($p in $procs) {
+                if ($p.MainWindowHandle -ne [IntPtr]::Zero) {
+                    try {
+                        $wsh2.AppActivate($p.Id) | Out-Null
+                        Start-Sleep -Milliseconds 400
+                        $wsh2.SendKeys('{ENTER}')
+                    } catch { }
+                }
+            }
+        }
+        Start-Sleep -Seconds 1
+    }
+    if ($wsh2) {
+        $procs = Get-Process -Name 'changepk' -ErrorAction SilentlyContinue
+        foreach ($p in $procs) {
+            if ($p.MainWindowHandle -ne [IntPtr]::Zero) {
+                try {
+                    $wsh2.AppActivate($p.Id) | Out-Null
+                    Start-Sleep -Milliseconds 400
+                    $wsh2.SendKeys('{ENTER}')
+                } catch { }
+            }
+        }
+    }
+    Stop-Notice2 $dNotice2
+    Write-Host 'Da hoan tat nhap de key qua Modern Activation de ghi nhan Digital License.'
+}
 try {
     if (-not (Test-Path $KeyFile)) { throw 'Khong tim thay file key da ma hoa. Hay chay lai acti-win.ps1 va nhap key.' }
     $enc = (Get-Content $KeyFile -Raw).Trim()
@@ -980,7 +1087,8 @@ try {
     }
     Stop-Notice2 $noticeProc2
     if ($ok) {
-        Show-Info2 "Da kich hoat thanh cong Windows Pro. 5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
+        Invoke-ConvertToDigitalLicense2 $key
+        Show-Info2 "Da kich hoat va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
     } else {
         $errText = "$o1`n$o2"
         if ($errText.Length -gt 1500) { $errText = $errText.Substring(0, 1500) }
@@ -1045,7 +1153,8 @@ try {
                 if ($ok) {
                     $cidGroups = @()
                     for ($ci = 0; $ci -lt $autoCid2.Length; $ci += 6) { $cidGroups += $autoCid2.Substring($ci, [Math]::Min(6, $autoCid2.Length - $ci)) }
-                    Show-Info2 "Da tu dong lay CID ($($cidSource2)) va kich hoat thanh cong Windows Pro qua may chu Microsoft!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
+                    Invoke-ConvertToDigitalLicense2 $key
+                    Show-Info2 "Da tu dong lay CID ($($cidSource2)) va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
                 } else {
                     Write-Host "Kich hoat bang CID tu dong chua thanh cong: $atpOut2"
                 }
@@ -1085,7 +1194,8 @@ try {
                         }
                         Stop-Notice2 $noticePhone
                         if ($ok) {
-                            Show-Info2 "Da kich hoat thanh cong Windows Pro bang Confirmation ID.`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
+                            Invoke-ConvertToDigitalLicense2 $key
+                            Show-Info2 "Da kich hoat bang Confirmation ID va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
                         } else {
                             $atpText = $atpOut
                             if ($atpText.Length -gt 1200) { $atpText = $atpText.Substring(0, 1200) }
@@ -1211,11 +1321,12 @@ $last5 = $key.Substring($key.Length - 5)
 if ($isPro) {
     $result = Invoke-ActivateAndCheck $key $last5
     if ($result.Ok) {
-        Show-Info "Da kich hoat thanh cong Windows Pro. 5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
+        Invoke-ConvertToDigitalLicense $key
+        Show-Info "Da kich hoat va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
     } else {
         # Already-Pro machine: same phone flow as phase 2, instead of
         # stopping at the online error.
-        Invoke-PhoneActivation $last5 $result.Output | Out-Null
+        Invoke-PhoneActivation $last5 $result.Output $key | Out-Null
     }
     exit
 }
