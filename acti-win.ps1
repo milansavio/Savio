@@ -1,4 +1,4 @@
-﻿<#
+<#
 acti-win.ps1 - Windows 10/11 Home -> Pro, legitimate edition upgrade.
 This script only activates Windows with a product key the user owns
 and types in at runtime. The key is never written to this file, never
@@ -348,6 +348,166 @@ function Get-CidFromBatchActivation($IidDigits, $ExtendedPid) {
         return @{ Ok = $false; Error = $_.Exception.Message }
     }
 }
+function ConvertTo-Base64Url([byte[]]$Bytes) {
+    return [Convert]::ToBase64String($Bytes).TrimEnd('=') -replace '\+', '-' -replace '/', '_'
+}
+function Get-NetworkUtcTime {
+    $resp = $null
+    try {
+        $req = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create('http://www.msftconnecttest.com/connecttest.txt')
+        $req.Method = 'HEAD'
+        $req.Timeout = 3000
+        $req.KeepAlive = $false
+        $req.Proxy = $null
+        $resp = $req.GetResponse()
+        $dateStr = $resp.Headers['Date']
+        if ($dateStr) {
+            $serverUtc = [DateTime]::Parse($dateStr).ToUniversalTime().AddSeconds(3)
+            return [int64]($serverUtc - [DateTime]'1970-01-01').TotalSeconds
+        }
+    } catch { }
+    finally { if ($resp) { $resp.Close() } }
+    return [int64]([DateTime]::UtcNow.AddSeconds(3) - [DateTime]'1970-01-01').TotalSeconds
+}
+function New-VisualApiDpopToken($Url, $Method) {
+    Add-Type -AssemblyName System.Core -ErrorAction SilentlyContinue | Out-Null
+    $ecdsa = New-Object System.Security.Cryptography.ECDsaCng(256)
+    try {
+        $blob = $ecdsa.Key.Export([System.Security.Cryptography.CngKeyBlobFormat]::EccPublicBlob)
+        $x = New-Object byte[] 32
+        $y = New-Object byte[] 32
+        [Array]::Copy($blob, 8, $x, 0, 32)
+        [Array]::Copy($blob, 40, $y, 0, 32)
+
+        $jwk = '{"kty":"EC","crv":"P-256","x":"' + (ConvertTo-Base64Url $x) + '","y":"' + (ConvertTo-Base64Url $y) + '"}'
+        $hdr = '{"alg":"ES256","typ":"dpop+jwt","jwk":' + $jwk + '}'
+        $iat = Get-NetworkUtcTime
+        $pld = '{"htu":"' + $Url + '","htm":"' + $Method + '","jti":"' + ([Guid]::NewGuid().ToString()) + '","iat":' + $iat + '}'
+
+        $unsignedJwt = (ConvertTo-Base64Url ([System.Text.Encoding]::UTF8.GetBytes($hdr))) + '.' + (ConvertTo-Base64Url ([System.Text.Encoding]::UTF8.GetBytes($pld)))
+        $sig = $ecdsa.SignData([System.Text.Encoding]::UTF8.GetBytes($unsignedJwt))
+
+        return $unsignedJwt + '.' + (ConvertTo-Base64Url $sig)
+    } finally {
+        $ecdsa.Clear()
+    }
+}
+function Get-CidFromVisualSupport($IidDigits) {
+    try {
+        $cleanIID = ($IidDigits -replace '\D', '')
+        if ($cleanIID.Length -lt 40) {
+            return @{ Ok = $false; Error = "Installation ID khong hop le ($($cleanIID.Length) chu so)." }
+        }
+
+        # 1. Lay access token tu file cuc bo hoac server chia se
+        $token = $null
+        $tokenFile = Join-Path $env:TEMP 'CidToken.txt'
+        if (Test-Path $tokenFile) {
+            try {
+                $rawToken = (Get-Content $tokenFile -Raw -ErrorAction SilentlyContinue).Trim()
+                if ($rawToken -match '^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+){2}$') { $token = $rawToken }
+            } catch { }
+        }
+        if (-not $token) {
+            try {
+                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+                $tokenResp = Invoke-RestMethod -Uri 'https://cidtoken.ntriver.org/token.json' -Method Get -TimeoutSec 10 -ErrorAction Stop
+                if ($tokenResp -and $tokenResp.token) {
+                    $token = [string]$tokenResp.token
+                }
+            } catch {
+                return @{ Ok = $false; Error = "Khong lay duoc access token tu token server: $($_.Exception.Message)" }
+            }
+        }
+        if (-not $token) {
+            return @{ Ok = $false; Error = "Access token rong hoac khong hop le." }
+        }
+
+        # 2. Sinh DPoP JWT voi khoa ephemeral ECDSA P-256
+        $dpop = New-VisualApiDpopToken '/api/productActivation/validateIID' 'POST'
+        if (-not $dpop) {
+            return @{ Ok = $false; Error = "Khong tao duoc DPoP token." }
+        }
+
+        # 3. Gui request POST toi Microsoft VisualSupport API
+        $url = 'https://visualsupport.microsoft.com/api/productActivation/validateIID'
+        $numDigits = [int]($cleanIID.Length / 9)
+        $body = '{"IID":"' + $cleanIID + '","ProductType":"windows","productGroup":"Windows","productName":"Windows 11","numberOfDigits":' + $numDigits + ',"Country":"USA","Region":"NOAM","InstalledDevices":1,"OverrideStatusCode":"MUL","InitialReasonCode":"45164"}'
+
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+        $request = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($url)
+        $request.Method = 'POST'
+        $request.KeepAlive = $false
+        $request.Proxy = $null
+        $request.Timeout = 15000
+        $request.ContentType = 'application/json; charset=utf-8'
+        $request.UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        $request.Headers.Set('Authorization', "Bearer $token")
+        $request.Headers.Set('DPoP', $dpop)
+        $request.Headers.Set('x-session-id', ('app_' + [Guid]::NewGuid().ToString('N')))
+
+        $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+        $request.ContentLength = $bodyBytes.Length
+        $reqStream = $request.GetRequestStream()
+        $reqStream.Write($bodyBytes, 0, $bodyBytes.Length)
+        $reqStream.Close()
+
+        $respText = $null
+        try {
+            $response = $request.GetResponse()
+            $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+            $respText = $reader.ReadToEnd()
+            $reader.Close()
+            $response.Close()
+        } catch [System.Net.WebException] {
+            $webEx = $_.Exception
+            if ($webEx.Response) {
+                $reader = New-Object System.IO.StreamReader($webEx.Response.GetResponseStream())
+                $respText = $reader.ReadToEnd()
+                $reader.Close()
+            } else {
+                return @{ Ok = $false; Error = "VisualSupport WebException: $($webEx.Message)" }
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($respText)) {
+            return @{ Ok = $false; Error = "VisualSupport API khong tra ve du lieu." }
+        }
+
+        # 4. Parse ket qua JSON
+        Add-Type -AssemblyName System.Web.Extensions -ErrorAction SilentlyContinue | Out-Null
+        $json = $null
+        try {
+            $jsSerializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+            $json = $jsSerializer.DeserializeObject($respText)
+        } catch {
+            try { $json = ConvertFrom-Json $respText } catch { }
+        }
+
+        if ($json) {
+            $cid = $null
+            if ($json -is [System.Collections.IDictionary] -and $json.Contains('cid')) { $cid = $json['cid'] }
+            elseif ($json.cid) { $cid = $json.cid }
+
+            if ($cid) {
+                $cidDigits = ($cid -replace '\D', '')
+                if ($cidDigits.Length -ge 40) {
+                    return @{ Ok = $true; CID = $cidDigits }
+                }
+            }
+
+            $msg = if ($json -is [System.Collections.IDictionary] -and $json.Contains('message')) { $json['message'] } elseif ($json.message) { $json.message } else { $null }
+            $reason = if ($json -is [System.Collections.IDictionary] -and $json.Contains('reasonCode')) { $json['reasonCode'] } elseif ($json.reasonCode) { $json.reasonCode } else { $null }
+            if ($msg -or $reason) {
+                return @{ Ok = $false; Error = "VisualSupport tra ve: $msg (reasonCode: $reason)" }
+            }
+        }
+
+        return @{ Ok = $false; Error = "Khong tim thay CID trong ket qua VisualSupport: $respText" }
+    } catch {
+        return @{ Ok = $false; Error = $_.Exception.Message }
+    }
+}
 function Invoke-PhoneActivation($Last5, $ErrorOutput) {
     $errText = $ErrorOutput
     if ($errText.Length -gt 1500) { $errText = $errText.Substring(0, 1500) }
@@ -363,39 +523,61 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput) {
         return $false
     }
 
-    # --- Test T3: Thu tu dong lay CID qua BatchActivation cua Microsoft ---
+    # --- Test T3: Thu tu dong lay CID qua BatchActivation va VisualSupport API ---
     $dlvOut = Invoke-Slmgr @('/dlv')
     $extPid = if ($dlvOut -match 'Extended PID:\s*(\S+)') { $Matches[1].Trim() } else { $null }
+    $autoCid = $null
+    $cidSource = ''
     if ($extPid) {
         Write-Host 'Dang thu tu dong lay CID qua may chu Microsoft (BatchActivation)...'
-        $autoNotice = Start-ActivatingNotice 'Dang thu tu dong lay CID qua may chu Microsoft, vui long doi...'
+        $autoNotice = Start-ActivatingNotice 'Dang thu tu dong lay CID qua may chu Microsoft (BatchActivation), vui long doi...'
         $batchResult = Get-CidFromBatchActivation -IidDigits $iidDigits -ExtendedPid $extPid
         Stop-ActivatingNotice $autoNotice
         if ($batchResult.Ok -and $batchResult.CID) {
             $autoCid = $batchResult.CID
-            Write-Host "Da lay CID tu dong thanh cong: $autoCid. Dang tien hanh kich hoat..."
-            $atpOut = Invoke-Slmgr @('/atp', $autoCid)
-            $phoneNotice = Start-ActivatingNotice 'Dang kich hoat bang CID tu dong, vui long doi...'
-            $phoneDeadline = (Get-Date).AddSeconds(30)
-            $phoneOk = $false
-            $phoneCheck = 0
-            while ((Get-Date) -lt $phoneDeadline) {
-                $phoneCheck++
-                Write-Host "Dang kiem tra kich hoat, vui long doi... (lan $phoneCheck)"
-                if (Test-Activated $Last5) { $phoneOk = $true; break }
-                Start-Sleep -Seconds 5
-            }
-            Stop-ActivatingNotice $phoneNotice
-            if ($phoneOk) {
-                $cidGroups = @()
-                for ($ci = 0; $ci -lt $autoCid.Length; $ci += 6) { $cidGroups += $autoCid.Substring($ci, [Math]::Min(6, $autoCid.Length - $ci)) }
-                Show-Info "Da tu dong lay CID va kich hoat thanh cong Windows Pro qua may chu Microsoft!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $Last5" 'ActWin - Thanh cong'
-                return $true
-            } else {
-                Write-Host "Kich hoat bang CID tu dong chua thanh cong: $atpOut"
-            }
+            $cidSource = 'BatchActivation'
+            Write-Host "Da lay CID tu dong thanh cong tu BatchActivation: $autoCid"
         } else {
-            Write-Host "Tu dong lay CID khong thanh cong: $($batchResult.Error)"
+            Write-Host "BatchActivation khong thanh cong: $($batchResult.Error)"
+        }
+    }
+
+    # Neu BatchActivation khong tra ve CID (vi du loi 0x71: het luot), tu dong chuyen sang Microsoft VisualSupport API (aka.ms/aoh)
+    if (-not $autoCid) {
+        Write-Host 'Dang chuyen sang tu dong lay CID qua Microsoft VisualSupport API (aka.ms/aoh)...'
+        $visualNotice = Start-ActivatingNotice 'Dang tu dong lay CID qua Microsoft VisualSupport API, vui long doi...'
+        $visualResult = Get-CidFromVisualSupport -IidDigits $iidDigits
+        Stop-ActivatingNotice $visualNotice
+        if ($visualResult.Ok -and $visualResult.CID) {
+            $autoCid = $visualResult.CID
+            $cidSource = 'VisualSupport API'
+            Write-Host "Da lay CID tu dong thanh cong tu VisualSupport API: $autoCid"
+        } else {
+            Write-Host "VisualSupport API khong thanh cong: $($visualResult.Error)"
+        }
+    }
+
+    if ($autoCid) {
+        Write-Host "Dang tien hanh kich hoat bang CID tu dong ($($cidSource): $autoCid)..."
+        $atpOut = Invoke-Slmgr @('/atp', $autoCid)
+        $phoneNotice = Start-ActivatingNotice "Dang kich hoat bang CID tu dong ($($cidSource)), vui long doi..."
+        $phoneDeadline = (Get-Date).AddSeconds(30)
+        $phoneOk = $false
+        $phoneCheck = 0
+        while ((Get-Date) -lt $phoneDeadline) {
+            $phoneCheck++
+            Write-Host "Dang kiem tra kich hoat, vui long doi... (lan $phoneCheck)"
+            if (Test-Activated $Last5) { $phoneOk = $true; break }
+            Start-Sleep -Seconds 5
+        }
+        Stop-ActivatingNotice $phoneNotice
+        if ($phoneOk) {
+            $cidGroups = @()
+            for ($ci = 0; $ci -lt $autoCid.Length; $ci += 6) { $cidGroups += $autoCid.Substring($ci, [Math]::Min(6, $autoCid.Length - $ci)) }
+            Show-Info "Da tu dong lay CID ($($cidSource)) va kich hoat thanh cong Windows Pro qua may chu Microsoft!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $Last5" 'ActWin - Thanh cong'
+            return $true
+        } else {
+            Write-Host "Kich hoat bang CID tu dong chua thanh cong: $atpOut"
         }
     }
     $iidGroups = @()
@@ -606,6 +788,166 @@ function Get-CidFromBatchActivation2($IidDigits, $ExtendedPid) {
         return @{ Ok = $false; Error = $_.Exception.Message }
     }
 }
+function ConvertTo-Base64Url2([byte[]]$Bytes) {
+    return [Convert]::ToBase64String($Bytes).TrimEnd('=') -replace '\+', '-' -replace '/', '_'
+}
+function Get-NetworkUtcTime2 {
+    $resp = $null
+    try {
+        $req = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create('http://www.msftconnecttest.com/connecttest.txt')
+        $req.Method = 'HEAD'
+        $req.Timeout = 3000
+        $req.KeepAlive = $false
+        $req.Proxy = $null
+        $resp = $req.GetResponse()
+        $dateStr = $resp.Headers['Date']
+        if ($dateStr) {
+            $serverUtc = [DateTime]::Parse($dateStr).ToUniversalTime().AddSeconds(3)
+            return [int64]($serverUtc - [DateTime]'1970-01-01').TotalSeconds
+        }
+    } catch { }
+    finally { if ($resp) { $resp.Close() } }
+    return [int64]([DateTime]::UtcNow.AddSeconds(3) - [DateTime]'1970-01-01').TotalSeconds
+}
+function New-VisualApiDpopToken2($Url, $Method) {
+    Add-Type -AssemblyName System.Core -ErrorAction SilentlyContinue | Out-Null
+    $ecdsa = New-Object System.Security.Cryptography.ECDsaCng(256)
+    try {
+        $blob = $ecdsa.Key.Export([System.Security.Cryptography.CngKeyBlobFormat]::EccPublicBlob)
+        $x = New-Object byte[] 32
+        $y = New-Object byte[] 32
+        [Array]::Copy($blob, 8, $x, 0, 32)
+        [Array]::Copy($blob, 40, $y, 0, 32)
+
+        $jwk = '{"kty":"EC","crv":"P-256","x":"' + (ConvertTo-Base64Url2 $x) + '","y":"' + (ConvertTo-Base64Url2 $y) + '"}'
+        $hdr = '{"alg":"ES256","typ":"dpop+jwt","jwk":' + $jwk + '}'
+        $iat = Get-NetworkUtcTime2
+        $pld = '{"htu":"' + $Url + '","htm":"' + $Method + '","jti":"' + ([Guid]::NewGuid().ToString()) + '","iat":' + $iat + '}'
+
+        $unsignedJwt = (ConvertTo-Base64Url2 ([System.Text.Encoding]::UTF8.GetBytes($hdr))) + '.' + (ConvertTo-Base64Url2 ([System.Text.Encoding]::UTF8.GetBytes($pld)))
+        $sig = $ecdsa.SignData([System.Text.Encoding]::UTF8.GetBytes($unsignedJwt))
+
+        return $unsignedJwt + '.' + (ConvertTo-Base64Url2 $sig)
+    } finally {
+        $ecdsa.Clear()
+    }
+}
+function Get-CidFromVisualSupport2($IidDigits) {
+    try {
+        $cleanIID = ($IidDigits -replace '\D', '')
+        if ($cleanIID.Length -lt 40) {
+            return @{ Ok = $false; Error = "Installation ID khong hop le ($($cleanIID.Length) chu so)." }
+        }
+
+        # 1. Lay access token tu file cuc bo hoac server chia se
+        $token = $null
+        $tokenFile = Join-Path $env:TEMP 'CidToken.txt'
+        if (Test-Path $tokenFile) {
+            try {
+                $rawToken = (Get-Content $tokenFile -Raw -ErrorAction SilentlyContinue).Trim()
+                if ($rawToken -match '^[A-Za-z0-9_-]+(\.[A-Za-z0-9_-]+){2}$') { $token = $rawToken }
+            } catch { }
+        }
+        if (-not $token) {
+            try {
+                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+                $tokenResp = Invoke-RestMethod -Uri 'https://cidtoken.ntriver.org/token.json' -Method Get -TimeoutSec 10 -ErrorAction Stop
+                if ($tokenResp -and $tokenResp.token) {
+                    $token = [string]$tokenResp.token
+                }
+            } catch {
+                return @{ Ok = $false; Error = "Khong lay duoc access token tu token server: $($_.Exception.Message)" }
+            }
+        }
+        if (-not $token) {
+            return @{ Ok = $false; Error = "Access token rong hoac khong hop le." }
+        }
+
+        # 2. Sinh DPoP JWT voi khoa ephemeral ECDSA P-256
+        $dpop = New-VisualApiDpopToken2 '/api/productActivation/validateIID' 'POST'
+        if (-not $dpop) {
+            return @{ Ok = $false; Error = "Khong tao duoc DPoP token." }
+        }
+
+        # 3. Gui request POST toi Microsoft VisualSupport API
+        $url = 'https://visualsupport.microsoft.com/api/productActivation/validateIID'
+        $numDigits = [int]($cleanIID.Length / 9)
+        $body = '{"IID":"' + $cleanIID + '","ProductType":"windows","productGroup":"Windows","productName":"Windows 11","numberOfDigits":' + $numDigits + ',"Country":"USA","Region":"NOAM","InstalledDevices":1,"OverrideStatusCode":"MUL","InitialReasonCode":"45164"}'
+
+        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+        $request = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($url)
+        $request.Method = 'POST'
+        $request.KeepAlive = $false
+        $request.Proxy = $null
+        $request.Timeout = 15000
+        $request.ContentType = 'application/json; charset=utf-8'
+        $request.UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+        $request.Headers.Set('Authorization', "Bearer $token")
+        $request.Headers.Set('DPoP', $dpop)
+        $request.Headers.Set('x-session-id', ('app_' + [Guid]::NewGuid().ToString('N')))
+
+        $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
+        $request.ContentLength = $bodyBytes.Length
+        $reqStream = $request.GetRequestStream()
+        $reqStream.Write($bodyBytes, 0, $bodyBytes.Length)
+        $reqStream.Close()
+
+        $respText = $null
+        try {
+            $response = $request.GetResponse()
+            $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
+            $respText = $reader.ReadToEnd()
+            $reader.Close()
+            $response.Close()
+        } catch [System.Net.WebException] {
+            $webEx = $_.Exception
+            if ($webEx.Response) {
+                $reader = New-Object System.IO.StreamReader($webEx.Response.GetResponseStream())
+                $respText = $reader.ReadToEnd()
+                $reader.Close()
+            } else {
+                return @{ Ok = $false; Error = "VisualSupport WebException: $($webEx.Message)" }
+            }
+        }
+
+        if ([string]::IsNullOrWhiteSpace($respText)) {
+            return @{ Ok = $false; Error = "VisualSupport API khong tra ve du lieu." }
+        }
+
+        # 4. Parse ket qua JSON
+        Add-Type -AssemblyName System.Web.Extensions -ErrorAction SilentlyContinue | Out-Null
+        $json = $null
+        try {
+            $jsSerializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+            $json = $jsSerializer.DeserializeObject($respText)
+        } catch {
+            try { $json = ConvertFrom-Json $respText } catch { }
+        }
+
+        if ($json) {
+            $cid = $null
+            if ($json -is [System.Collections.IDictionary] -and $json.Contains('cid')) { $cid = $json['cid'] }
+            elseif ($json.cid) { $cid = $json.cid }
+
+            if ($cid) {
+                $cidDigits = ($cid -replace '\D', '')
+                if ($cidDigits.Length -ge 40) {
+                    return @{ Ok = $true; CID = $cidDigits }
+                }
+            }
+
+            $msg = if ($json -is [System.Collections.IDictionary] -and $json.Contains('message')) { $json['message'] } elseif ($json.message) { $json.message } else { $null }
+            $reason = if ($json -is [System.Collections.IDictionary] -and $json.Contains('reasonCode')) { $json['reasonCode'] } elseif ($json.reasonCode) { $json.reasonCode } else { $null }
+            if ($msg -or $reason) {
+                return @{ Ok = $false; Error = "VisualSupport tra ve: $msg (reasonCode: $reason)" }
+            }
+        }
+
+        return @{ Ok = $false; Error = "Khong tim thay CID trong ket qua VisualSupport: $respText" }
+    } catch {
+        return @{ Ok = $false; Error = $_.Exception.Message }
+    }
+}
 try {
     if (-not (Test-Path $KeyFile)) { throw 'Khong tim thay file key da ma hoa. Hay chay lai acti-win.ps1 va nhap key.' }
     $enc = (Get-Content $KeyFile -Raw).Trim()
@@ -650,40 +992,62 @@ try {
         $iidDigits = ($dtiLine -replace '[^0-9]', '')
         if ($iidDigits.Length -lt 20) { $iidDigits = ($dtiOut -replace '[^0-9]', '') }
         if ($iidDigits.Length -ge 20) {
-            # --- Test T3: Thu tu dong lay CID qua BatchActivation cua Microsoft ---
+            # --- Test T3: Thu tu dong lay CID qua BatchActivation va VisualSupport API ---
             $dlvOut = (& cscript.exe //Nologo $slmgr /dlv 2>&1 | Out-String)
             $extPid = if ($dlvOut -match 'Extended PID:\s*(\S+)') { $Matches[1].Trim() } else { $null }
+            $autoCid2 = $null
+            $cidSource2 = ''
             if ($extPid) {
                 Write-Host 'Dang thu tu dong lay CID tu server Microsoft (BatchActivation)...'
-                $noticeAuto2 = Start-Notice2 'Dang thu tu dong lay CID qua may chu Microsoft, vui long doi...'
+                $noticeAuto2 = Start-Notice2 'Dang thu tu dong lay CID qua may chu Microsoft (BatchActivation), vui long doi...'
                 $batchResult2 = Get-CidFromBatchActivation2 $iidDigits $extPid
                 Stop-Notice2 $noticeAuto2
                 if ($batchResult2.Ok -and $batchResult2.CID) {
                     $autoCid2 = $batchResult2.CID
-                    Write-Host "Da lay CID tu dong thanh cong: $autoCid2. Dang kich hoat..."
-                    $atpOut2 = (& cscript.exe //Nologo $slmgr /atp $autoCid2 2>&1 | Out-String)
-                    $noticePhone2 = Start-Notice2 'Dang kich hoat qua CID tu dong, vui long doi...'
-                    $phoneDeadline2 = (Get-Date).AddSeconds(30)
-                    $phoneCheck2 = 0
-                    while ((Get-Date) -lt $phoneDeadline2) {
-                        $phoneCheck2++
-                        Write-Host "Dang kiem tra kich hoat, vui long doi... (lan $phoneCheck2)"
-                        $prods2 = Get-CimInstance SoftwareLicensingProduct -ErrorAction SilentlyContinue |
-                            Where-Object { $_.PartialProductKey -and $_.LicenseStatus -eq 1 }
-                        foreach ($p2 in $prods2) { if ($p2.PartialProductKey -eq $last5) { $ok = $true; break } }
-                        if ($ok) { break }
-                        Start-Sleep -Seconds 5
-                    }
-                    Stop-Notice2 $noticePhone2
-                    if ($ok) {
-                        $cidGroups = @()
-                        for ($ci = 0; $ci -lt $autoCid2.Length; $ci += 6) { $cidGroups += $autoCid2.Substring($ci, [Math]::Min(6, $autoCid2.Length - $ci)) }
-                        Show-Info2 "Da tu dong lay CID va kich hoat thanh cong Windows Pro qua may chu Microsoft!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
-                    } else {
-                        Write-Host "Kich hoat bang CID tu dong chua thanh cong: $atpOut2"
-                    }
+                    $cidSource2 = 'BatchActivation'
+                    Write-Host "Da lay CID tu dong thanh cong tu BatchActivation: $autoCid2"
                 } else {
-                    Write-Host "Tu dong lay CID khong thanh cong: $($batchResult2.Error)"
+                    Write-Host "BatchActivation khong thanh cong: $($batchResult2.Error)"
+                }
+            }
+
+            # Neu BatchActivation khong co CID, chuyen sang VisualSupport API
+            if (-not $autoCid2) {
+                Write-Host 'Dang chuyen sang tu dong lay CID qua Microsoft VisualSupport API (aka.ms/aoh)...'
+                $noticeVisual2 = Start-Notice2 'Dang tu dong lay CID qua Microsoft VisualSupport API, vui long doi...'
+                $visualResult2 = Get-CidFromVisualSupport2 $iidDigits
+                Stop-Notice2 $noticeVisual2
+                if ($visualResult2.Ok -and $visualResult2.CID) {
+                    $autoCid2 = $visualResult2.CID
+                    $cidSource2 = 'VisualSupport API'
+                    Write-Host "Da lay CID tu dong thanh cong tu VisualSupport API: $autoCid2"
+                } else {
+                    Write-Host "VisualSupport API khong thanh cong: $($visualResult2.Error)"
+                }
+            }
+
+            if ($autoCid2) {
+                Write-Host "Da lay CID tu dong ($($cidSource2): $autoCid2). Dang kich hoat..."
+                $atpOut2 = (& cscript.exe //Nologo $slmgr /atp $autoCid2 2>&1 | Out-String)
+                $noticePhone2 = Start-Notice2 "Dang kich hoat qua CID tu dong ($($cidSource2)), vui long doi..."
+                $phoneDeadline2 = (Get-Date).AddSeconds(30)
+                $phoneCheck2 = 0
+                while ((Get-Date) -lt $phoneDeadline2) {
+                    $phoneCheck2++
+                    Write-Host "Dang kiem tra kich hoat, vui long doi... (lan $phoneCheck2)"
+                    $prods2 = Get-CimInstance SoftwareLicensingProduct -ErrorAction SilentlyContinue |
+                        Where-Object { $_.PartialProductKey -and $_.LicenseStatus -eq 1 }
+                    foreach ($p2 in $prods2) { if ($p2.PartialProductKey -eq $last5) { $ok = $true; break } }
+                    if ($ok) { break }
+                    Start-Sleep -Seconds 5
+                }
+                Stop-Notice2 $noticePhone2
+                if ($ok) {
+                    $cidGroups = @()
+                    for ($ci = 0; $ci -lt $autoCid2.Length; $ci += 6) { $cidGroups += $autoCid2.Substring($ci, [Math]::Min(6, $autoCid2.Length - $ci)) }
+                    Show-Info2 "Da tu dong lay CID ($($cidSource2)) va kich hoat thanh cong Windows Pro qua may chu Microsoft!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi trung voi key ban da nhap: $last5" 'ActWin - Thanh cong'
+                } else {
+                    Write-Host "Kich hoat bang CID tu dong chua thanh cong: $atpOut2"
                 }
             }
             if (-not $ok) {
