@@ -88,6 +88,8 @@ $Phase2File = Join-Path $WorkDir 'acti-win-phase2.ps1'
 $CleanupFile = Join-Path $WorkDir 'acti-win-cleanup.ps1'
 $GenericProKey = 'VK7JG-NPHTM-C97JM-9MPGT-3V66T'
 $RawUrl = 'https://raw.githubusercontent.com/milansavio/Savio/milansavio-Savio/acti-win.ps1'
+$script:WroteIidClipboard = $false
+$script:IidClipboardValue = $null
 
 Add-Type -AssemblyName System.Windows.Forms -ErrorAction SilentlyContinue
 Add-Type -AssemblyName System.Drawing -ErrorAction SilentlyContinue
@@ -178,7 +180,9 @@ function Get-MenuChoice {
     Write-Host '  2. Chỉ nâng cấp Windows Pro không kích hoạt'
     Write-Host ''
     while ($true) {
-        $choice = (Read-Host 'Nhap 1 hoac 2').Trim()
+        $rawChoice = Read-Host 'Nhap 1 hoac 2'
+        if ($null -eq $rawChoice) { return $null }
+        $choice = $rawChoice.Trim()
         if ($choice -eq '1' -or $choice -eq '2') { return $choice }
         Write-Host 'Chi nhap 1 hoac 2.'
     }
@@ -193,37 +197,174 @@ function Test-Activated($Last5) {
 }
 function Invoke-Slmgr($Arguments) {
     $slmgr = Join-Path $env:SystemRoot 'System32\slmgr.vbs'
-    return (& cscript.exe //Nologo $slmgr @Arguments 2>&1 | Out-String)
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        return (& cscript.exe //Nologo $slmgr @Arguments 2>&1 | Out-String)
+    } catch {
+        return "$($_.Exception.Message)"
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+function Get-LicensingIds($Last5) {
+    $iid = ''
+    $extPid = $null
+    try {
+        $allProds = @(Get-CimInstance -ClassName SoftwareLicensingProduct -ErrorAction Stop)
+        $lic = $null
+        if ($Last5) {
+            $lic = $allProds | Where-Object { $_.PartialProductKey -eq $Last5 -and $_.OfflineInstallationId } | Select-Object -First 1
+        }
+        if (-not $lic) {
+            $lic = $allProds | Where-Object { $_.PartialProductKey -and $_.OfflineInstallationId -and $_.Name -like '*Windows*' } | Select-Object -First 1
+        }
+        if ($lic) {
+            if ($lic.OfflineInstallationId) { $iid = ($lic.OfflineInstallationId -replace '[^0-9]', '') }
+            if ($lic.ProductKeyID -and ($lic.ProductKeyID -notmatch '000-000000')) { $extPid = [string]$lic.ProductKeyID }
+        }
+    } catch { }
+    if ($iid.Length -lt 20) {
+        $dtiOut = Invoke-Slmgr @('/dti')
+        if (($dtiOut -replace '[\s-]', '') -match '(\d{40,})') {
+            $iid = $Matches[1]
+        } else {
+            $dtiLine = ($dtiOut -split "`n") | Where-Object { $_ -match 'Installation ID|ID' } | Select-Object -First 1
+            if ($dtiLine) { $iid = ($dtiLine -replace '[^0-9]', '') }
+        }
+    }
+    if (-not $extPid -or $extPid -match '000-000000') {
+        $dlvOut = Invoke-Slmgr @('/dlv')
+        if ($dlvOut -match '(\d{5}-\d{5}-\d{3}-\d{6}-\d{2}-\d+-\d+\.\d+-\d+)') {
+            $extPid = $Matches[1].Trim()
+        } elseif ($dlvOut -match 'Extended PID:\s*(\S+)') {
+            $extPid = $Matches[1].Trim()
+        }
+    }
+    if (-not $extPid -or $extPid -match '000-000000') {
+        $extPid = '00000-00138-207-109016-00-1033-26100.0000-0922026'
+    }
+    return @{ IID = $iid; ExtendedPid = $extPid }
 }
 function Start-ActivatingNotice($NoticeText = 'Dang kich hoat, vui long doi...') {
     try {
+        $safeB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$NoticeText))
         $noticeLines = @(
+            ('$parentPid = ' + $PID),
+            ('$msgText = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("' + $safeB64 + '"))'),
             '$form = New-Object System.Windows.Forms.Form',
             '$form.Text = "ActWin"',
             '$form.Size = New-Object System.Drawing.Size(420, 150)',
             '$form.StartPosition = "CenterScreen"',
             '$form.TopMost = $true',
             '$label = New-Object System.Windows.Forms.Label',
-            ('$label.Text = "' + $NoticeText + '"'),
+            '$label.Text = $msgText',
             '$label.AutoSize = $false',
             '$label.Location = New-Object System.Drawing.Point(20, 40)',
             '$label.Size = New-Object System.Drawing.Size(360, 60)',
             '$label.Font = New-Object System.Drawing.Font("Segoe UI", 12)',
             '$form.Controls.Add($label)',
+            '$ticks = 0',
             '$timer = New-Object System.Windows.Forms.Timer',
-            '$timer.Interval = 180000',
-            '$timer.Add_Tick({ $form.Close() })',
+            '$timer.Interval = 500',
+            '$timer.Add_Tick({ $ticks++; if ($ticks -ge 360 -or -not (Get-Process -Id $parentPid -ErrorAction SilentlyContinue)) { $timer.Stop(); $form.Close() } })',
             '$timer.Start()',
             '$form.BringToFront()',
             '$form.Activate()',
             '[void]$form.ShowDialog()'
         )
-        $noticeCode = ($noticeLines -join "`n")
-        $noticeCode = "Add-Type -AssemblyName System.Windows.Forms`nAdd-Type -AssemblyName System.Drawing`n" + $noticeCode
+        $noticeCode = "Add-Type -AssemblyName System.Windows.Forms`nAdd-Type -AssemblyName System.Drawing`n" + ($noticeLines -join "`n")
         $noticeBytes = [System.Text.Encoding]::Unicode.GetBytes($noticeCode)
         $noticeEncoded = [Convert]::ToBase64String($noticeBytes)
-        return (Start-Process powershell.exe -PassThru -ArgumentList '-NoProfile', '-EncodedCommand', $noticeEncoded -ErrorAction Stop)
+        return (Start-Process powershell.exe -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-EncodedCommand', $noticeEncoded -ErrorAction Stop)
     } catch { return $null }
+}
+function Start-ActWinWatchdog($DirToClean, $ExtraFile = $null, $CleanDirRecursive = $false) {
+    try {
+        $dB64 = if ($DirToClean) { [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$DirToClean)) } else { '' }
+        $fB64 = if ($ExtraFile) { [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$ExtraFile)) } else { '' }
+        $recFlag = if ($CleanDirRecursive) { '$true' } else { '$false' }
+        $wdCode = @"
+`$ErrorActionPreference = 'SilentlyContinue'
+`$ppid = $PID
+while (Get-Process -Id `$ppid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 400 }
+Start-Sleep -Milliseconds 300
+Get-ChildItem `$env:TEMP -Filter 'ActWin*' -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue
+if ('$fB64') {
+    `$ef = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$fB64'))
+    if (Test-Path `$ef) { Remove-Item `$ef -Force -ErrorAction SilentlyContinue }
+}
+if ('$dB64') {
+    `$wd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$dB64'))
+    if ($recFlag) {
+        try { Unregister-ScheduledTask -TaskName 'ActWin-Phase2' -Confirm:`$false -ErrorAction SilentlyContinue } catch { }
+        try { Unregister-ScheduledTask -TaskName 'ActWin-Cleanup' -Confirm:`$false -ErrorAction SilentlyContinue } catch { }
+        if (Test-Path `$wd) { Remove-Item `$wd -Force -Recurse -ErrorAction SilentlyContinue }
+    } else {
+        `$iidF = Join-Path `$wd 'IID.txt'
+        if (Test-Path `$iidF) { Remove-Item `$iidF -Force -ErrorAction SilentlyContinue }
+        if ((Test-Path `$wd) -and -not (Get-ChildItem `$wd -ErrorAction SilentlyContinue)) { Remove-Item `$wd -Force -ErrorAction SilentlyContinue }
+    }
+}
+"@
+        $wdEnc = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($wdCode))
+        Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile', '-EncodedCommand', $wdEnc -ErrorAction SilentlyContinue | Out-Null
+    } catch { }
+}
+function Invoke-CleanActWinArtifacts($RemoveWorkDir = $false) {
+    try { Get-ChildItem $env:TEMP -Filter 'ActWin*' -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue } catch { }
+    try {
+        $iidF = Join-Path $WorkDir 'IID.txt'
+        if (Test-Path $iidF) { Remove-Item $iidF -Force -ErrorAction SilentlyContinue }
+    } catch { }
+    if ($RemoveWorkDir) {
+        try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+        try { Unregister-ScheduledTask -TaskName $CleanupTaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+        try { if (Test-Path $WorkDir) { Remove-Item $WorkDir -Force -Recurse -ErrorAction SilentlyContinue } } catch { }
+    } else {
+        try { if ((Test-Path $WorkDir) -and -not (Get-ChildItem $WorkDir -ErrorAction SilentlyContinue)) { Remove-Item $WorkDir -Force -ErrorAction SilentlyContinue } } catch { }
+    }
+    try {
+        if ($script:WroteIidClipboard -and $script:IidClipboardValue) {
+            $curClip = ''
+            try { $curClip = [System.Windows.Forms.Clipboard]::GetText() } catch { }
+            if ($curClip -eq $script:IidClipboardValue) {
+                [System.Windows.Forms.Clipboard]::Clear()
+            }
+        }
+    } catch { }
+}
+function Clear-ActWinHistory {
+    try {
+        $paths = New-Object System.Collections.Generic.List[string]
+        $defHist = Join-Path $env:APPDATA 'Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt'
+        if ($defHist) { $paths.Add($defHist) }
+        $pwsh7Hist = Join-Path $env:APPDATA 'Microsoft\PowerShell\PSReadLine\ConsoleHost_history.txt'
+        if ($pwsh7Hist -and -not $paths.Contains($pwsh7Hist)) { $paths.Add($pwsh7Hist) }
+        try {
+            $opt = Get-PSReadLineOption -ErrorAction SilentlyContinue
+            if ($opt -and $opt.HistorySavePath -and -not $paths.Contains($opt.HistorySavePath)) {
+                $paths.Add($opt.HistorySavePath)
+            }
+        } catch { }
+        foreach ($hp in $paths) {
+            if (Test-Path $hp) {
+                try {
+                    $lines = @(Get-Content $hp -Encoding UTF8 -ErrorAction SilentlyContinue)
+                    $filtered = @($lines | Where-Object { $_ -notmatch '(?i)acti-win\.ps1|milansavio/Savio|ActWin-Phase2|ActWin-Cleanup' })
+                    if ($filtered.Count -lt $lines.Count) {
+                        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+                        if ($filtered.Count -eq 0) {
+                            [System.IO.File]::WriteAllText($hp, '', $utf8NoBom)
+                        } else {
+                            [System.IO.File]::WriteAllLines($hp, [string[]]$filtered, $utf8NoBom)
+                        }
+                    }
+                } catch { }
+            }
+        }
+        try { [Microsoft.PowerShell.PSConsoleReadLine]::ClearHistory() } catch { }
+    } catch { }
 }
 function Stop-ActivatingNotice($Proc) {
     try { if ($Proc -and -not $Proc.HasExited) { Stop-Process -Id $Proc.Id -Force -ErrorAction SilentlyContinue } } catch { }
@@ -723,17 +864,18 @@ public static class ActWinModernLic {
             hr = actFn(factory, out actOp);
             if (hr < 0 || actOp == IntPtr.Zero) return string.Format("ERR:ActCall:0x{0:X8}", hr);
             hr = WaitAsync(actOp, 45000, out aErr);
+            string extraKey = (!string.IsNullOrEmpty(workKey) && !workKey.Equals(key, StringComparison.OrdinalIgnoreCase)) ? (";workKey=" + workKey) : "";
             if (hr < 0) {
-                if (redeemHr < 0) return string.Format("ERR:Redeem=0x{0:X8};ActWait=0x{1:X8}", redeemHr, hr);
-                return string.Format("ERR:ActWait:0x{0:X8}", hr);
+                if (redeemHr < 0) return string.Format("ERR:Redeem=0x{0:X8};ActWait=0x{1:X8}{2}", redeemHr, hr, extraKey);
+                return string.Format("ERR:ActWait:0x{0:X8}{1}", hr, extraKey);
             }
             var actResFn = (ActionGetResultsDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(Marshal.ReadIntPtr(actOp), 0x40), typeof(ActionGetResultsDel));
             hr = actResFn(actOp);
             if (hr < 0) {
-                if (redeemHr < 0) return string.Format("ERR:Redeem=0x{0:X8};ActRes=0x{1:X8}", redeemHr, hr);
-                return string.Format("ERR:ActRes:0x{0:X8}", hr);
+                if (redeemHr < 0) return string.Format("ERR:Redeem=0x{0:X8};ActRes=0x{1:X8}{2}", redeemHr, hr, extraKey);
+                return string.Format("ERR:ActRes:0x{0:X8}{1}", hr, extraKey);
             }
-            return string.Format("OK:action={0};redeemable={1};redeemHr=0x{2:X8}", action, isRedeemable, redeemHr);
+            return string.Format("OK:action={0};redeemable={1};redeemHr=0x{2:X8}{3}", action, isRedeemable, redeemHr, extraKey);
         } finally {
             if (actOp != IntPtr.Zero) Marshal.Release(actOp);
             if (applyOp != IntPtr.Zero) Marshal.Release(applyOp);
@@ -759,11 +901,16 @@ function Invoke-ConvertToDigitalLicense($ProductKey) {
         try { Start-Service sppsvc -ErrorAction SilentlyContinue } catch { }
 
         $winRtRes = $null
+        $fallbackKey = $ProductKey
         try {
             if (-not ('ActWinModernLic' -as [type])) {
                 Add-Type -TypeDefinition $ModernLicCs -ErrorAction Stop
             }
             $winRtRes = [ActWinModernLic]::ConvertToDigitalLicense($ProductKey)
+            if ($winRtRes -match ';workKey=([A-Z0-9-]+)') {
+                $fallbackKey = $Matches[1]
+                $winRtRes = $winRtRes -replace ';workKey=[A-Z0-9-]+', ''
+            }
             Write-Host "Modern Activation (LicensingPolicyManager): $winRtRes"
             if ($winRtRes -and $winRtRes.StartsWith('OK:')) {
                 return @{ Ok = $true; Detail = $winRtRes }
@@ -776,7 +923,7 @@ function Invoke-ConvertToDigitalLicense($ProductKey) {
         try {
             $pInfo = New-Object System.Diagnostics.ProcessStartInfo
             $pInfo.FileName = Join-Path $env:SystemRoot 'System32\changepk.exe'
-            $pInfo.Arguments = "/ProductKey $ProductKey /NoUI /NoReboot"
+            $pInfo.Arguments = "/ProductKey $fallbackKey /NoUI /NoReboot"
             $pInfo.UseShellExecute = $false
             $pInfo.CreateNoWindow = $true
             $cpkProc = [System.Diagnostics.Process]::Start($pInfo)
@@ -807,19 +954,16 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput, $FullKey = $null) {
     if ($errText.Length -gt 1500) { $errText = $errText.Substring(0, 1500) }
     Show-Info "Kich hoat online khong thanh cong. Loi tu he thong:`n$errText`nBay gio se chuyen sang kich hoat bang dien thoai (phone activation)." 'ActWin - Chua kich hoat online'
     Write-Host 'Dang lay Installation ID (IID), vui long doi...'
-    $dtiOut = Invoke-Slmgr @('/dti')
-    $dtiLine = ($dtiOut -split "`n") | Where-Object { $_ -match 'Installation ID' } | Select-Object -First 1
-    if (-not $dtiLine) { $dtiLine = $dtiOut }
-    $iidDigits = ($dtiLine -replace '[^0-9]', '')
-    if ($iidDigits.Length -lt 20) { $iidDigits = ($dtiOut -replace '[^0-9]', '') }
-    if ($iidDigits.Length -lt 20) {
+    $last5Local = if ($FullKey -and $FullKey.Length -ge 5) { $FullKey.Substring($FullKey.Length - 5) } else { $Last5 }
+    $licIds = Get-LicensingIds $last5Local
+    $iidDigits = $licIds.IID
+    if (-not $iidDigits -or $iidDigits.Length -lt 20) {
         Show-Info "Khong lay duoc Installation ID tu he thong. Loi online truoc do:`n$errText" 'ActWin - Khong lay duoc IID'
         return $false
     }
 
     # --- Test T3: Thu tu dong lay CID qua BatchActivation va VisualSupport API ---
-    $dlvOut = Invoke-Slmgr @('/dlv')
-    $extPid = if ($dlvOut -match 'Extended PID:\s*(\S+)') { $Matches[1].Trim() } else { $null }
+    $extPid = $licIds.ExtendedPid
     $autoCid = $null
     $cidSource = ''
     if ($extPid) {
@@ -870,6 +1014,7 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput, $FullKey = $null) {
             for ($ci = 0; $ci -lt $autoCid.Length; $ci += 6) { $cidGroups += $autoCid.Substring($ci, [Math]::Min(6, $autoCid.Length - $ci)) }
             $conv = Invoke-ConvertToDigitalLicense $FullKey
             if ($conv.Ok) {
+                Clear-ActWinHistory
                 Show-Info "Da tu dong lay CID ($($cidSource)) va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $Last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
             } else {
                 Show-Info "Da tu dong lay CID ($($cidSource)) va kich hoat thanh cong Windows Pro (5 ky tu cuoi: $Last5).`r`nTuy nhien buoc tu dong chuyen sang Digital License chua thanh cong ($($conv.Detail)).`r`nNeu Settings chua bao Digital license, hay vao Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Da kich hoat (Canh bao Digital License)'
@@ -884,7 +1029,12 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput, $FullKey = $null) {
     $iidText = "Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID`r`n`r`n"
     for ($gi = 0; $gi -lt $iidGroups.Count; $gi++) { $iidText += "Buoc $($gi + 1): $($iidGroups[$gi])`r`n" }
     $iidText += "`r`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
-    try { Set-Clipboard ($iidGroups -join ' ') } catch { }
+    try {
+        $clipStr = ($iidGroups -join ' ')
+        Set-Clipboard $clipStr
+        $script:WroteIidClipboard = $true
+        $script:IidClipboardValue = $clipStr
+    } catch { }
     try { Set-Content (Join-Path $env:TEMP 'ActWin-IID.txt') $iidText -Force -Encoding UTF8 } catch { }
     $iidResult = Show-TextForm 'ActWin - Installation ID' 'Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID (CID) roi bam OK de nhap CID:' $iidText $true
     if ($null -eq $iidResult) { return $false }
@@ -916,6 +1066,7 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput, $FullKey = $null) {
         if ($phoneOk) {
             $conv = Invoke-ConvertToDigitalLicense $FullKey
             if ($conv.Ok) {
+                Clear-ActWinHistory
                 Show-Info "Da kich hoat bang Confirmation ID va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $Last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
             } else {
                 Show-Info "Da kich hoat bang Confirmation ID thanh cong (5 ky tu cuoi: $Last5).`r`nTuy nhien buoc tu dong chuyen sang Digital License chua thanh cong ($($conv.Detail)).`r`nNeu Settings chua bao Digital license, hay vao Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Da kich hoat (Canh bao Digital License)'
@@ -942,6 +1093,8 @@ $TaskName = '__TASK__'
 $KeyFile = '__KEYFILE__'
 $Phase2File = '__PHASE2FILE__'
 $WorkDir = '__WORKDIR__'
+$script:WroteIidClipboard2 = $false
+$script:IidClipboardValue2 = $null
 function Show-Info2($Text, $Title = 'ActWin') {
     try {
         $form = New-Object System.Windows.Forms.Form
@@ -1007,24 +1160,137 @@ function Show-TextForm2($Title, $Prompt, $InitialText, $ReadOnly) {
         try { return [Microsoft.VisualBasic.Interaction]::InputBox($Prompt, $Title, $InitialText) } catch { return $null }
     }
 }
+function Invoke-Slmgr2($Arguments) {
+    $slmgr = Join-Path $env:SystemRoot 'System32\slmgr.vbs'
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        return (& cscript.exe //Nologo $slmgr @Arguments 2>&1 | Out-String)
+    } catch {
+        return "$($_.Exception.Message)"
+    } finally {
+        $ErrorActionPreference = $prevEap
+    }
+}
+function Test-Activated2($Last5) {
+    try {
+        $prods = Get-CimInstance -ClassName SoftwareLicensingProduct -ErrorAction Stop |
+            Where-Object { $_.PartialProductKey -and $_.LicenseStatus -eq 1 }
+        foreach ($p in $prods) { if ($p.PartialProductKey -eq $Last5) { return $true } }
+    } catch { }
+    return $false
+}
+function Get-LicensingIds2($Last5) {
+    $iid = ''
+    $extPid = $null
+    try {
+        $allProds = @(Get-CimInstance -ClassName SoftwareLicensingProduct -ErrorAction Stop)
+        $lic = $null
+        if ($Last5) {
+            $lic = $allProds | Where-Object { $_.PartialProductKey -eq $Last5 -and $_.OfflineInstallationId } | Select-Object -First 1
+        }
+        if (-not $lic) {
+            $lic = $allProds | Where-Object { $_.PartialProductKey -and $_.OfflineInstallationId -and $_.Name -like '*Windows*' } | Select-Object -First 1
+        }
+        if ($lic) {
+            if ($lic.OfflineInstallationId) { $iid = ($lic.OfflineInstallationId -replace '[^0-9]', '') }
+            if ($lic.ProductKeyID -and ($lic.ProductKeyID -notmatch '000-000000')) { $extPid = [string]$lic.ProductKeyID }
+        }
+    } catch { }
+    if ($iid.Length -lt 20) {
+        $dtiOut = Invoke-Slmgr2 @('/dti')
+        if (($dtiOut -replace '[\s-]', '') -match '(\d{40,})') {
+            $iid = $Matches[1]
+        } else {
+            $dtiLine = ($dtiOut -split "`n") | Where-Object { $_ -match 'Installation ID|ID' } | Select-Object -First 1
+            if ($dtiLine) { $iid = ($dtiLine -replace '[^0-9]', '') }
+        }
+    }
+    if (-not $extPid -or $extPid -match '000-000000') {
+        $dlvOut = Invoke-Slmgr2 @('/dlv')
+        if ($dlvOut -match '(\d{5}-\d{5}-\d{3}-\d{6}-\d{2}-\d+-\d+\.\d+-\d+)') {
+            $extPid = $Matches[1].Trim()
+        } elseif ($dlvOut -match 'Extended PID:\s*(\S+)') {
+            $extPid = $Matches[1].Trim()
+        }
+    }
+    if (-not $extPid -or $extPid -match '000-000000') {
+        $extPid = '00000-00138-207-109016-00-1033-26100.0000-0922026'
+    }
+    return @{ IID = $iid; ExtendedPid = $extPid }
+}
+function Start-Watchdog2 {
+    try {
+        $dB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$WorkDir))
+        $fB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$Phase2File))
+        $kB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$KeyFile))
+        $tB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$TaskName))
+        $wdCode = @"
+`$ErrorActionPreference = 'SilentlyContinue'
+`$ppid = $PID
+while (Get-Process -Id `$ppid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 400 }
+Start-Sleep -Milliseconds 300
+`$tn = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$tB64'))
+`$kf = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$kB64'))
+`$pf = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$fB64'))
+`$wd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$dB64'))
+try { Unregister-ScheduledTask -TaskName `$tn -Confirm:`$false -ErrorAction SilentlyContinue } catch { }
+try { Get-ChildItem `$env:TEMP -Filter 'ActWin*' -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue } catch { }
+try { if (Test-Path `$kf) { Remove-Item `$kf -Force -ErrorAction SilentlyContinue } } catch { }
+try { if (Test-Path `$pf) { Remove-Item `$pf -Force -ErrorAction SilentlyContinue } } catch { }
+try { if (Test-Path `$wd) { Remove-Item `$wd -Force -Recurse -ErrorAction SilentlyContinue } } catch { }
+"@
+        $wdEnc = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($wdCode))
+        Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile', '-EncodedCommand', $wdEnc -ErrorAction SilentlyContinue | Out-Null
+    } catch { }
+}
+function Clear-ActWinHistory2 {
+    try {
+        $paths = New-Object System.Collections.Generic.List[string]
+        $defHist = Join-Path $env:APPDATA 'Microsoft\Windows\PowerShell\PSReadLine\ConsoleHost_history.txt'
+        if ($defHist) { $paths.Add($defHist) }
+        $pwsh7Hist = Join-Path $env:APPDATA 'Microsoft\PowerShell\PSReadLine\ConsoleHost_history.txt'
+        if ($pwsh7Hist -and -not $paths.Contains($pwsh7Hist)) { $paths.Add($pwsh7Hist) }
+        foreach ($hp in $paths) {
+            if (Test-Path $hp) {
+                try {
+                    $lines = @(Get-Content $hp -Encoding UTF8 -ErrorAction SilentlyContinue)
+                    $filtered = @($lines | Where-Object { $_ -notmatch '(?i)acti-win\.ps1|milansavio/Savio|ActWin-Phase2|ActWin-Cleanup' })
+                    if ($filtered.Count -lt $lines.Count) {
+                        $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+                        if ($filtered.Count -eq 0) {
+                            [System.IO.File]::WriteAllText($hp, '', $utf8NoBom)
+                        } else {
+                            [System.IO.File]::WriteAllLines($hp, [string[]]$filtered, $utf8NoBom)
+                        }
+                    }
+                } catch { }
+            }
+        }
+    } catch { }
+}
 function Start-Notice2($NoticeText = 'Dang kich hoat, vui long doi...') {
     try {
+        $safeB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$NoticeText))
         $nLines = @(
+            ('$parentPid = ' + $PID),
+            ('$msgText = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String("' + $safeB64 + '"))'),
             '$form = New-Object System.Windows.Forms.Form',
             '$form.Text = "ActWin"',
             '$form.Size = New-Object System.Drawing.Size(420, 150)',
             '$form.StartPosition = "CenterScreen"',
             '$form.TopMost = $true',
             '$label = New-Object System.Windows.Forms.Label',
-            ('$label.Text = "' + $NoticeText + '"'),
+            '$label.Text = $msgText',
             '$label.AutoSize = $false',
             '$label.Location = New-Object System.Drawing.Point(20, 40)',
             '$label.Size = New-Object System.Drawing.Size(360, 60)',
             '$label.Font = New-Object System.Drawing.Font("Segoe UI", 12)',
             '$form.Controls.Add($label)',
+            '$ticks = 0',
             '$timer = New-Object System.Windows.Forms.Timer',
-            '$timer.Interval = 180000',
-            '$timer.Add_Tick({ $form.Close() })',
+            '$timer.Interval = 500',
+            '$timer.Add_Tick({ $ticks++; if ($ticks -ge 360 -or -not (Get-Process -Id $parentPid -ErrorAction SilentlyContinue)) { $timer.Stop(); $form.Close() } })',
             '$timer.Start()',
             '$form.BringToFront()',
             '$form.Activate()',
@@ -1033,7 +1299,7 @@ function Start-Notice2($NoticeText = 'Dang kich hoat, vui long doi...') {
         $nCode = "Add-Type -AssemblyName System.Windows.Forms`nAdd-Type -AssemblyName System.Drawing`n" + ($nLines -join "`n")
         $nBytes = [System.Text.Encoding]::Unicode.GetBytes($nCode)
         $nEncoded = [Convert]::ToBase64String($nBytes)
-        return (Start-Process powershell.exe -PassThru -ArgumentList '-NoProfile', '-EncodedCommand', $nEncoded -ErrorAction Stop)
+        return (Start-Process powershell.exe -PassThru -WindowStyle Hidden -ArgumentList '-NoProfile', '-EncodedCommand', $nEncoded -ErrorAction Stop)
     } catch { return $null }
 }
 function Stop-Notice2($Proc) {
@@ -1282,12 +1548,17 @@ function Invoke-ConvertToDigitalLicense2($ProductKey) {
         try { Start-Service sppsvc -ErrorAction SilentlyContinue } catch { }
 
         $winRtRes = $null
+        $fallbackKey = $ProductKey
         try {
             if (-not ('ActWinModernLic' -as [type])) {
                 $modernLicCs2 = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__MODERNLIC_B64__'))
                 Add-Type -TypeDefinition $modernLicCs2 -ErrorAction Stop
             }
             $winRtRes = [ActWinModernLic]::ConvertToDigitalLicense($ProductKey)
+            if ($winRtRes -match ';workKey=([A-Z0-9-]+)') {
+                $fallbackKey = $Matches[1]
+                $winRtRes = $winRtRes -replace ';workKey=[A-Z0-9-]+', ''
+            }
             Write-Host "Modern Activation (LicensingPolicyManager): $winRtRes"
             if ($winRtRes -and $winRtRes.StartsWith('OK:')) {
                 return @{ Ok = $true; Detail = $winRtRes }
@@ -1300,7 +1571,7 @@ function Invoke-ConvertToDigitalLicense2($ProductKey) {
         try {
             $pInfo = New-Object System.Diagnostics.ProcessStartInfo
             $pInfo.FileName = Join-Path $env:SystemRoot 'System32\changepk.exe'
-            $pInfo.Arguments = "/ProductKey $ProductKey /NoUI /NoReboot"
+            $pInfo.Arguments = "/ProductKey $fallbackKey /NoUI /NoReboot"
             $pInfo.UseShellExecute = $false
             $pInfo.CreateNoWindow = $true
             $cpkProc2 = [System.Diagnostics.Process]::Start($pInfo)
@@ -1326,6 +1597,7 @@ function Invoke-ConvertToDigitalLicense2($ProductKey) {
     }
 }
 try {
+    Start-Watchdog2
     if (-not (Test-Path $KeyFile)) { throw 'Khong tim thay file key da ma hoa. Hay chay lai acti-win.ps1 va nhap key.' }
     $enc = (Get-Content $KeyFile -Raw).Trim()
     $enc = $enc.Trim([char]0xFEFF)
@@ -1334,31 +1606,40 @@ try {
     $ptr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secure)
     $key = [Runtime.InteropServices.Marshal]::PtrToStringAuto($ptr)
     [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($ptr)
+    # Go ngay task va file key sau khi da nap key vao RAM de tranh sot rac neu tat ngang
+    try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+    try { if (Test-Path $KeyFile) { Remove-Item $KeyFile -Force -ErrorAction SilentlyContinue } } catch { }
     $last5 = $key.Substring($key.Length - 5)
-    $slmgr = Join-Path $env:SystemRoot 'System32\slmgr.vbs'
     Write-Host 'Dang kich hoat online, vui long doi...'
     $noticeProc2 = Start-Notice2
-    $o1 = (& cscript.exe //Nologo $slmgr /ipk $key 2>&1 | Out-String)
-    Write-Host 'Da nhap key, dang kich hoat online...'
-    $o2 = (& cscript.exe //Nologo $slmgr /ato 2>&1 | Out-String)
+    $o1 = ''
+    $o2 = ''
     $ok = $false
-    $deadline = (Get-Date).AddSeconds(30)
-    $again = $false
-    $checkCount2 = 0
-    while ((Get-Date) -lt $deadline) {
-        $checkCount2++
-        Write-Host "Dang kiem tra kich hoat, vui long doi... (lan $checkCount2)"
-        $prods = Get-CimInstance -ClassName SoftwareLicensingProduct -ErrorAction SilentlyContinue |
-            Where-Object { $_.PartialProductKey -and $_.LicenseStatus -eq 1 }
-        foreach ($p in $prods) { if ($p.PartialProductKey -eq $last5) { $ok = $true; break } }
-        if ($ok) { break }
-        Start-Sleep -Seconds 5
-        if (-not $again) { $o2 = (& cscript.exe //Nologo $slmgr /ato 2>&1 | Out-String); $again = $true }
+    try {
+        if (Test-Activated2 $last5) {
+            $ok = $true
+        } else {
+            $o1 = Invoke-Slmgr2 @('/ipk', $key)
+            Write-Host 'Da nhap key, dang kich hoat online...'
+            $o2 = Invoke-Slmgr2 @('/ato')
+            $deadline = (Get-Date).AddSeconds(30)
+            $again = $false
+            $checkCount2 = 0
+            while ((Get-Date) -lt $deadline) {
+                $checkCount2++
+                Write-Host "Dang kiem tra kich hoat, vui long doi... (lan $checkCount2)"
+                if (Test-Activated2 $last5) { $ok = $true; break }
+                Start-Sleep -Seconds 5
+                if (-not $again) { $o2 = Invoke-Slmgr2 @('/ato'); $again = $true }
+            }
+        }
+    } finally {
+        Stop-Notice2 $noticeProc2
     }
-    Stop-Notice2 $noticeProc2
     if ($ok) {
         $conv2 = Invoke-ConvertToDigitalLicense2 $key
         if ($conv2.Ok) {
+            Clear-ActWinHistory2
             Show-Info2 "Da kich hoat va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
         } else {
             Show-Info2 "Da kich hoat Windows Pro thanh cong (5 ky tu cuoi: $last5).`r`nTuy nhien buoc tu dong chuyen sang Digital License chua thanh cong ($($conv2.Detail)).`r`nNeu Settings chua bao Digital license, hay vao Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Da kich hoat (Canh bao Digital License)'
@@ -1368,15 +1649,11 @@ try {
         if ($errText.Length -gt 1500) { $errText = $errText.Substring(0, 1500) }
         Show-Info2 "Kich hoat online khong thanh cong. Loi tu he thong:`n$errText`nBay gio se chuyen sang kich hoat bang dien thoai (phone activation)." 'ActWin - Chua kich hoat online'
         Write-Host 'Dang lay Installation ID (IID), vui long doi...'
-        $dtiOut = (& cscript.exe //Nologo $slmgr /dti 2>&1 | Out-String)
-        $dtiLine = ($dtiOut -split "`n") | Where-Object { $_ -match 'Installation ID' } | Select-Object -First 1
-        if (-not $dtiLine) { $dtiLine = $dtiOut }
-        $iidDigits = ($dtiLine -replace '[^0-9]', '')
-        if ($iidDigits.Length -lt 20) { $iidDigits = ($dtiOut -replace '[^0-9]', '') }
-        if ($iidDigits.Length -ge 20) {
+        $licIds2 = Get-LicensingIds2 $last5
+        $iidDigits = $licIds2.IID
+        if ($iidDigits -and $iidDigits.Length -ge 20) {
             # --- Test T3: Thu tu dong lay CID qua BatchActivation va VisualSupport API ---
-            $dlvOut = (& cscript.exe //Nologo $slmgr /dlv 2>&1 | Out-String)
-            $extPid = if ($dlvOut -match 'Extended PID:\s*(\S+)') { $Matches[1].Trim() } else { $null }
+            $extPid = $licIds2.ExtendedPid
             $autoCid2 = $null
             $cidSource2 = ''
             if ($extPid) {
@@ -1410,25 +1687,26 @@ try {
 
             if ($autoCid2) {
                 Write-Host "Da lay CID tu dong ($($cidSource2): $autoCid2). Dang kich hoat..."
-                $atpOut2 = (& cscript.exe //Nologo $slmgr /atp $autoCid2 2>&1 | Out-String)
+                $atpOut2 = Invoke-Slmgr2 @('/atp', $autoCid2)
                 $noticePhone2 = Start-Notice2 "Dang kich hoat qua CID tu dong ($($cidSource2)), vui long doi..."
-                $phoneDeadline2 = (Get-Date).AddSeconds(30)
-                $phoneCheck2 = 0
-                while ((Get-Date) -lt $phoneDeadline2) {
-                    $phoneCheck2++
-                    Write-Host "Dang kiem tra kich hoat, vui long doi... (lan $phoneCheck2)"
-                    $prods2 = Get-CimInstance SoftwareLicensingProduct -ErrorAction SilentlyContinue |
-                        Where-Object { $_.PartialProductKey -and $_.LicenseStatus -eq 1 }
-                    foreach ($p2 in $prods2) { if ($p2.PartialProductKey -eq $last5) { $ok = $true; break } }
-                    if ($ok) { break }
-                    Start-Sleep -Seconds 5
+                try {
+                    $phoneDeadline2 = (Get-Date).AddSeconds(30)
+                    $phoneCheck2 = 0
+                    while ((Get-Date) -lt $phoneDeadline2) {
+                        $phoneCheck2++
+                        Write-Host "Dang kiem tra kich hoat, vui long doi... (lan $phoneCheck2)"
+                        if (Test-Activated2 $last5) { $ok = $true; break }
+                        Start-Sleep -Seconds 5
+                    }
+                } finally {
+                    Stop-Notice2 $noticePhone2
                 }
-                Stop-Notice2 $noticePhone2
                 if ($ok) {
                     $cidGroups = @()
                     for ($ci = 0; $ci -lt $autoCid2.Length; $ci += 6) { $cidGroups += $autoCid2.Substring($ci, [Math]::Min(6, $autoCid2.Length - $ci)) }
                     $conv2 = Invoke-ConvertToDigitalLicense2 $key
                     if ($conv2.Ok) {
+                        Clear-ActWinHistory2
                         Show-Info2 "Da tu dong lay CID ($($cidSource2)) va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
                     } else {
                         Show-Info2 "Da tu dong lay CID ($($cidSource2)) va kich hoat thanh cong Windows Pro (5 ky tu cuoi: $last5).`r`nTuy nhien buoc tu dong chuyen sang Digital License chua thanh cong ($($conv2.Detail)).`r`nNeu Settings chua bao Digital license, hay vao Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Da kich hoat (Canh bao Digital License)'
@@ -1443,7 +1721,12 @@ try {
                 $iidText = "Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID`r`n`r`n"
                 for ($gi = 0; $gi -lt $iidGroups.Count; $gi++) { $iidText += "Buoc $($gi + 1): $($iidGroups[$gi])`r`n" }
                 $iidText += "`r`nDang 1 dong (de copy het): $($iidGroups -join ' ')"
-                try { Set-Clipboard ($iidGroups -join ' ') } catch { }
+                try {
+                    $clipStr2 = ($iidGroups -join ' ')
+                    Set-Clipboard $clipStr2
+                    $script:WroteIidClipboard2 = $true
+                    $script:IidClipboardValue2 = $clipStr2
+                } catch { }
                 try { if (Test-Path $WorkDir) { Set-Content (Join-Path $WorkDir 'IID.txt') $iidText -Force -Encoding UTF8 } } catch { }
                 $iidResult = Show-TextForm2 'ActWin - Installation ID' 'Copy tung step theo thu tu vao trang cua Microsoft link: aka.ms/aoh de lay Confirmation ID (CID) roi bam OK de nhap CID:' $iidText $true
                 if ($null -ne $iidResult) {
@@ -1459,21 +1742,22 @@ try {
                         }
                         $cidGroups = @()
                         for ($ci = 0; $ci -lt $cidDigits.Length; $ci += 6) { $cidGroups += $cidDigits.Substring($ci, [Math]::Min(6, $cidDigits.Length - $ci)) }
-                        $atpOut = (& cscript.exe //Nologo $slmgr /atp $cidDigits 2>&1 | Out-String)
+                        $atpOut = Invoke-Slmgr2 @('/atp', $cidDigits)
                         Write-Host 'Dang kich hoat qua Phone, vui long doi...'
                         $noticePhone = Start-Notice2 'Dang kich hoat qua Phone, vui long doi...'
-                        $phoneDeadline = (Get-Date).AddSeconds(30)
-                        while ((Get-Date) -lt $phoneDeadline) {
-                            $prods2 = Get-CimInstance SoftwareLicensingProduct -ErrorAction SilentlyContinue |
-                                Where-Object { $_.PartialProductKey -and $_.LicenseStatus -eq 1 }
-                            foreach ($p2 in $prods2) { if ($p2.PartialProductKey -eq $last5) { $ok = $true; break } }
-                            if ($ok) { break }
-                            Start-Sleep -Seconds 5
+                        try {
+                            $phoneDeadline = (Get-Date).AddSeconds(30)
+                            while ((Get-Date) -lt $phoneDeadline) {
+                                if (Test-Activated2 $last5) { $ok = $true; break }
+                                Start-Sleep -Seconds 5
+                            }
+                        } finally {
+                            Stop-Notice2 $noticePhone
                         }
-                        Stop-Notice2 $noticePhone
                         if ($ok) {
                             $conv2 = Invoke-ConvertToDigitalLicense2 $key
                             if ($conv2.Ok) {
+                                Clear-ActWinHistory2
                                 Show-Info2 "Da kich hoat bang Confirmation ID va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
                             } else {
                                 Show-Info2 "Da kich hoat bang Confirmation ID thanh cong (5 ky tu cuoi: $last5).`r`nTuy nhien buoc tu dong chuyen sang Digital License chua thanh cong ($($conv2.Detail)).`r`nNeu Settings chua bao Digital license, hay vao Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Da kich hoat (Canh bao Digital License)'
@@ -1495,9 +1779,17 @@ try {
     Show-Info2 "Phase 2 gap loi: $($_.Exception.Message)" 'ActWin - Loi'
 } finally {
     try { Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+    try { Get-ChildItem $env:TEMP -Filter 'ActWin*' -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue } catch { }
+    try {
+        if ($script:WroteIidClipboard2 -and $script:IidClipboardValue2) {
+            $curClip2 = ''
+            try { $curClip2 = [System.Windows.Forms.Clipboard]::GetText() } catch { }
+            if ($curClip2 -eq $script:IidClipboardValue2) { [System.Windows.Forms.Clipboard]::Clear() }
+        }
+    } catch { }
     try { if (Test-Path $KeyFile) { Remove-Item $KeyFile -Force -ErrorAction SilentlyContinue } } catch { }
     try { if (Test-Path $Phase2File) { Remove-Item $Phase2File -Force -ErrorAction SilentlyContinue } } catch { }
-    try { if ((Test-Path $WorkDir) -and -not (Get-ChildItem $WorkDir -ErrorAction SilentlyContinue)) { Remove-Item $WorkDir -Force -ErrorAction SilentlyContinue } } catch { }
+    try { if (Test-Path $WorkDir) { Remove-Item $WorkDir -Force -Recurse -ErrorAction SilentlyContinue } } catch { }
 }
 '@
 
@@ -1538,6 +1830,29 @@ function Show-InfoC($Text, $Title = 'ActWin') {
     } catch { Write-Host $Text }
 }
 try {
+    try {
+        $dB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$CWorkDir))
+        $fB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$CFile))
+        $tB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes([string]$CTask))
+        $wdC = @"
+`$ErrorActionPreference = 'SilentlyContinue'
+`$ppid = $PID
+while (Get-Process -Id `$ppid -ErrorAction SilentlyContinue) { Start-Sleep -Milliseconds 400 }
+Start-Sleep -Milliseconds 300
+`$tn = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$tB64'))
+`$cf = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$fB64'))
+`$wd = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('$dB64'))
+try { Unregister-ScheduledTask -TaskName `$tn -Confirm:`$false -ErrorAction SilentlyContinue } catch { }
+try { Unregister-ScheduledTask -TaskName 'ActWin-Phase2' -Confirm:`$false -ErrorAction SilentlyContinue } catch { }
+try { Get-ChildItem `$env:TEMP -Filter 'ActWin*' -ErrorAction SilentlyContinue | Remove-Item -Force -Recurse -ErrorAction SilentlyContinue } catch { }
+try { if (Test-Path `$cf) { Remove-Item `$cf -Force -ErrorAction SilentlyContinue } } catch { }
+try { if (Test-Path `$wd) { Remove-Item `$wd -Force -Recurse -ErrorAction SilentlyContinue } } catch { }
+"@
+        $wdCEnc = [Convert]::ToBase64String([System.Text.Encoding]::Unicode.GetBytes($wdC))
+        Start-Process powershell.exe -WindowStyle Hidden -ArgumentList '-NoProfile', '-EncodedCommand', $wdCEnc -ErrorAction SilentlyContinue | Out-Null
+    } catch { }
+    try { Unregister-ScheduledTask -TaskName $CTask -Confirm:$false -ErrorAction SilentlyContinue } catch { }
+    try { Unregister-ScheduledTask -TaskName 'ActWin-Phase2' -Confirm:$false -ErrorAction SilentlyContinue } catch { }
     $editionC = ''
     try { $editionC = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID } catch { }
     if ($editionC -match 'Professional') {
@@ -1559,98 +1874,122 @@ try {
 
 # Main flow
 if (-not (Test-IsAdmin)) {
-    $cmd = "irm '$RawUrl' | iex"
-    Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd
+    try {
+        if ($PSCommandPath -and (Test-Path $PSCommandPath)) {
+            Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', "`"$PSCommandPath`""
+        } else {
+            $cmd = "irm '$RawUrl' | iex"
+            Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', $cmd
+        }
+    } catch {
+        Show-Info "Vui long chay PowerShell voi quyen Administrator (Run as Administrator): $($_.Exception.Message)" 'ActWin - Can quyen Admin'
+    }
     exit
 }
 
-$edition = ''
-try { $edition = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID } catch { }
-$isPro = ($edition -match 'Professional')
+try {
+    $edition = ''
+    try { $edition = (Get-ItemProperty 'HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion').EditionID } catch { }
+    $isPro = ($edition -match 'Professional')
 
-$menuChoice = Get-MenuChoice
+    $menuChoice = Get-MenuChoice
+    if (-not $menuChoice) { Write-Host 'Da huy.'; exit }
 
-if ($menuChoice -eq '2') {
-    if ($isPro) {
-        Show-Info 'May da la Windows Pro. Lua chon 2 chi upgrade, khong can lam gi them va khong kich hoat.' 'ActWin - Da la Pro'
+    if ($menuChoice -eq '2') {
+        if ($isPro) {
+            Show-Info 'May da la Windows Pro. Lua chon 2 chi upgrade, khong can lam gi them va khong kich hoat.' 'ActWin - Da la Pro'
+            exit
+        }
+        if (-not (Test-Path $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null }
+        $cleanup = $CleanupTemplate.Replace('__CTASK__', $CleanupTaskName).Replace('__CFILE__', $CleanupFile).Replace('__CWORKDIR__', $WorkDir)
+        Set-Content $CleanupFile $cleanup -Force -Encoding UTF8
+        $currentUser2 = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+        $action2 = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy RemoteSigned -File `"$CleanupFile`""
+        $trigger2 = New-ScheduledTaskTrigger -AtLogOn -User $currentUser2
+        $principal2 = New-ScheduledTaskPrincipal -UserId $currentUser2 -LogonType Interactive -RunLevel Highest
+        $settings2 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+        Register-ScheduledTask -TaskName $CleanupTaskName -Action $action2 -Trigger $trigger2 -Principal $principal2 -Settings $settings2 -Force | Out-Null
+        # changepk launches the edition upgrade and returns while Windows is
+        # still showing "Preparing for upgrade". Its exit code is therefore
+        # NOT a failure signal here: do not delete the cleanup task on a
+        # non-zero code, and do not force a reboot while preparation runs.
+        # Windows reboots itself when preparation finishes; the cleanup task
+        # stays registered and runs at logon after that reboot. If no
+        # Preparing screen appears at all, check the edition and run again.
+        $prevEapCpk2 = $ErrorActionPreference
+        $ErrorActionPreference = 'Continue'
+        try { & changepk.exe /ProductKey $GenericProKey 2>$null | Out-Null } catch { } finally { $ErrorActionPreference = $prevEapCpk2 }
+        Show-Info 'Dang chuan bi upgrade len Pro, khong kich hoat theo lua chon 2. Dung tat may. May se tu khoi dong lai khi chuan bi xong, sau khi dang nhap lai task don dep se tu xoa task cua ActWin va file tam cua ActWin. Neu khong thay man hinh Preparing va may khong tu khoi dong lai, hay khoi dong lai thu cong - task don dep van con va se chay luc dang nhap.' 'ActWin - Dang chuan bi upgrade'
         exit
     }
+
+    $key = Get-ProKey
+    if (-not $key) { Write-Host 'Da huy: khong co key.'; exit }
+    $last5 = $key.Substring($key.Length - 5)
+
+    if ($isPro) {
+        Start-ActWinWatchdog $WorkDir $null $false
+        try {
+            if (Test-Activated $last5) {
+                Write-Host "May da kich hoat san voi key co 5 ky tu cuoi $last5. Chuyen thang sang buoc ghi nhan Digital License..."
+                $conv = Invoke-ConvertToDigitalLicense $key
+                if ($conv.Ok) {
+                    Clear-ActWinHistory
+                    Show-Info "May da kich hoat san voi key $last5 va da chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+                } else {
+                    Show-Info "May da kich hoat san voi key $last5, nhung buoc tu dong chuyen sang Digital License chua thanh cong ($($conv.Detail)).`r`nHay mo Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Canh bao Digital License'
+                }
+                exit
+            }
+            $result = Invoke-ActivateAndCheck $key $last5
+            if ($result.Ok) {
+                $conv = Invoke-ConvertToDigitalLicense $key
+                if ($conv.Ok) {
+                    Clear-ActWinHistory
+                    Show-Info "Da kich hoat va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+                } else {
+                    Show-Info "Da kich hoat Windows Pro thanh cong (5 ky tu cuoi: $last5).`r`nTuy nhien buoc tu dong chuyen sang Digital License chua thanh cong ($($conv.Detail)).`r`nNeu Settings chua bao Digital license, hay vao Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Da kich hoat (Canh bao Digital License)'
+                }
+            } else {
+                # Already-Pro machine: same phone flow as phase 2, instead of
+                # stopping at the online error.
+                Invoke-PhoneActivation $last5 $result.Output $key | Out-Null
+            }
+        } finally {
+            Invoke-CleanActWinArtifacts $false
+        }
+        exit
+    }
+
+    # Not Pro yet (Phase 1 Home -> Pro): save phase 2 first, then upgrade the edition, then reboot.
     if (-not (Test-Path $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null }
-    $cleanup = $CleanupTemplate.Replace('__CTASK__', $CleanupTaskName).Replace('__CFILE__', $CleanupFile).Replace('__CWORKDIR__', $WorkDir)
-    Set-Content $CleanupFile $cleanup -Force -Encoding UTF8
-    $currentUser2 = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-    $action2 = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy RemoteSigned -File `"$CleanupFile`""
-    $trigger2 = New-ScheduledTaskTrigger -AtLogOn -User $currentUser2
-    $principal2 = New-ScheduledTaskPrincipal -UserId $currentUser2 -LogonType Interactive -RunLevel Highest
-    $settings2 = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-    Register-ScheduledTask -TaskName $CleanupTaskName -Action $action2 -Trigger $trigger2 -Principal $principal2 -Settings $settings2 -Force | Out-Null
+    $secureKey = ConvertTo-SecureString $key -AsPlainText -Force
+    $encKey = $secureKey | ConvertFrom-SecureString
+    Set-Content $KeyFile $encKey -Force -NoNewline -Encoding Ascii
+
+    $modernLicB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($ModernLicCs))
+    $phase2 = $Phase2Template.Replace('__TASK__', $TaskName).Replace('__KEYFILE__', $KeyFile).Replace('__PHASE2FILE__', $Phase2File).Replace('__WORKDIR__', $WorkDir).Replace('__MODERNLIC_B64__', $modernLicB64)
+    Set-Content $Phase2File $phase2 -Force -Encoding UTF8
+
+    $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy RemoteSigned -File `"$Phase2File`""
+    $trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
+    $principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Highest
+    $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
+    Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
+
     # changepk launches the edition upgrade and returns while Windows is
     # still showing "Preparing for upgrade". Its exit code is therefore
-    # NOT a failure signal here: do not delete the cleanup task on a
-    # non-zero code, and do not force a reboot while preparation runs.
-    # Windows reboots itself when preparation finishes; the cleanup task
-    # stays registered and runs at logon after that reboot. If no
-    # Preparing screen appears at all, check the edition and run again.
-    & changepk.exe /ProductKey $GenericProKey
-    Show-Info 'Dang chuan bi upgrade len Pro, khong kich hoat theo lua chon 2. Dung tat may. May se tu khoi dong lai khi chuan bi xong, sau khi dang nhap lai task don dep se tu xoa task cua ActWin va file tam cua ActWin. Neu khong thay man hinh Preparing va may khong tu khoi dong lai, hay khoi dong lai thu cong - task don dep van con va se chay luc dang nhap.' 'ActWin - Dang chuan bi upgrade'
-    exit
+    # NOT a failure signal here: do not delete the phase 2 task or the
+    # encrypted key file on a non-zero code, and do not force a reboot
+    # while preparation runs. Windows reboots itself when preparation
+    # finishes; phase 2 stays registered and runs at logon after that
+    # reboot. If no Preparing screen appears at all, check the edition
+    # and run again.
+    $prevEapCpk1 = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try { & changepk.exe /ProductKey $GenericProKey 2>$null | Out-Null } catch { } finally { $ErrorActionPreference = $prevEapCpk1 }
+    Show-Info 'Dang chuan bi upgrade len Pro. Dung tat may. May se tu khoi dong lai khi chuan bi xong, sau khi dang nhap lai phase 2 se tu nhap key cua ban va kiem tra kich hoat. Neu khong thay man hinh Preparing va may khong tu khoi dong lai, hay khoi dong lai thu cong - task phase 2 van con va se chay luc dang nhap.' 'ActWin - Dang chuan bi upgrade'
+} catch {
+    Show-Info "ActWin gap loi: $($_.Exception.Message)" 'ActWin - Loi'
 }
-
-$key = Get-ProKey
-if (-not $key) { Write-Host 'Da huy: khong co key.'; exit }
-$last5 = $key.Substring($key.Length - 5)
-
-if ($isPro) {
-    if (Test-Activated $last5) {
-        Write-Host "May da kich hoat san voi key co 5 ky tu cuoi $last5. Chuyen thang sang buoc ghi nhan Digital License..."
-        $conv = Invoke-ConvertToDigitalLicense $key
-        if ($conv.Ok) {
-            Show-Info "May da kich hoat san voi key $last5 va da chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
-        } else {
-            Show-Info "May da kich hoat san voi key $last5, nhung buoc tu dong chuyen sang Digital License chua thanh cong ($($conv.Detail)).`r`nHay mo Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Canh bao Digital License'
-        }
-        exit
-    }
-    $result = Invoke-ActivateAndCheck $key $last5
-    if ($result.Ok) {
-        $conv = Invoke-ConvertToDigitalLicense $key
-        if ($conv.Ok) {
-            Show-Info "Da kich hoat va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
-        } else {
-            Show-Info "Da kich hoat Windows Pro thanh cong (5 ky tu cuoi: $last5).`r`nTuy nhien buoc tu dong chuyen sang Digital License chua thanh cong ($($conv.Detail)).`r`nNeu Settings chua bao Digital license, hay vao Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Da kich hoat (Canh bao Digital License)'
-        }
-    } else {
-        # Already-Pro machine: same phone flow as phase 2, instead of
-        # stopping at the online error.
-        Invoke-PhoneActivation $last5 $result.Output $key | Out-Null
-    }
-    exit
-}
-
-# Not Pro yet: save phase 2 first, then upgrade the edition, then reboot.
-if (-not (Test-Path $WorkDir)) { New-Item -ItemType Directory -Path $WorkDir -Force | Out-Null }
-$secureKey = ConvertTo-SecureString $key -AsPlainText -Force
-$encKey = $secureKey | ConvertFrom-SecureString
-Set-Content $KeyFile $encKey -Force -NoNewline -Encoding Ascii
-
-$modernLicB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($ModernLicCs))
-$phase2 = $Phase2Template.Replace('__TASK__', $TaskName).Replace('__KEYFILE__', $KeyFile).Replace('__PHASE2FILE__', $Phase2File).Replace('__WORKDIR__', $WorkDir).Replace('__MODERNLIC_B64__', $modernLicB64)
-Set-Content $Phase2File $phase2 -Force -Encoding UTF8
-
-$currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-$action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -ExecutionPolicy RemoteSigned -File `"$Phase2File`""
-$trigger = New-ScheduledTaskTrigger -AtLogOn -User $currentUser
-$principal = New-ScheduledTaskPrincipal -UserId $currentUser -LogonType Interactive -RunLevel Highest
-$settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
-Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Principal $principal -Settings $settings -Force | Out-Null
-
-# changepk launches the edition upgrade and returns while Windows is
-# still showing "Preparing for upgrade". Its exit code is therefore
-# NOT a failure signal here: do not delete the phase 2 task or the
-# encrypted key file on a non-zero code, and do not force a reboot
-# while preparation runs. Windows reboots itself when preparation
-# finishes; phase 2 stays registered and runs at logon after that
-# reboot. If no Preparing screen appears at all, check the edition
-# and run again.
-& changepk.exe /ProductKey $GenericProKey
-Show-Info 'Dang chuan bi upgrade len Pro. Dung tat may. May se tu khoi dong lai khi chuan bi xong, sau khi dang nhap lai phase 2 se tu nhap key cua ban va kiem tra kich hoat. Neu khong thay man hinh Preparing va may khong tu khoi dong lai, hay khoi dong lai thu cong - task phase 2 van con va se chay luc dang nhap.' 'ActWin - Dang chuan bi upgrade'
