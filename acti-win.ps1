@@ -174,8 +174,8 @@ function Get-ProKey {
 function Get-MenuChoice {
     Write-Host ''
     Write-Host 'ActWin - Chon 1 trong 2:'
-    Write-Host '  1. Kích hoạt bằng Key có sẵn'
-    Write-Host '  2. Up Windows Pro không kích hoạt'
+    Write-Host '  1. Kích hoạt Windows Pro bằng Key có sẵn - Tự động nâng cấp Home lên Pro'
+    Write-Host '  2. Chỉ nâng cấp Windows Pro không kích hoạt'
     Write-Host ''
     while ($true) {
         $choice = (Read-Host 'Nhap 1 hoac 2').Trim()
