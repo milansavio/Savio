@@ -313,7 +313,7 @@ function Get-CidFromBatchActivation($IidDigits, $ExtendedPid) {
                 '<Digest>' + $digest + '</Digest><RequestXml>' + $requestXml + '</RequestXml>' +
                 '</request></BatchActivate></soap:Body></soap:Envelope>'
 
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+        try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072 -bor 12288 } catch { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 }
         $resp = Invoke-WebRequest -Uri 'https://activation.sls.microsoft.com/BatchActivation/BatchActivation.asmx' `
             -Method Post -ContentType 'text/xml; charset=utf-8' `
             -Headers @{
@@ -352,22 +352,30 @@ function ConvertTo-Base64Url([byte[]]$Bytes) {
     return [Convert]::ToBase64String($Bytes).TrimEnd('=') -replace '\+', '-' -replace '/', '_'
 }
 function Get-NetworkUtcTime {
-    $resp = $null
-    try {
-        $req = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create('http://www.msftconnecttest.com/connecttest.txt')
-        $req.Method = 'HEAD'
-        $req.Timeout = 3000
-        $req.KeepAlive = $false
-        $req.Proxy = $null
-        $resp = $req.GetResponse()
-        $dateStr = $resp.Headers['Date']
-        if ($dateStr) {
-            $serverUtc = [DateTime]::Parse($dateStr).ToUniversalTime().AddSeconds(3)
-            return [int64]($serverUtc - [DateTime]'1970-01-01').TotalSeconds
-        }
-    } catch { }
-    finally { if ($resp) { $resp.Close() } }
-    return [int64]([DateTime]::UtcNow.AddSeconds(3) - [DateTime]'1970-01-01').TotalSeconds
+    foreach ($tUrl in @('https://visualsupport.microsoft.com/api/productActivation/validateIID', 'http://www.msftconnecttest.com/connecttest.txt')) {
+        $resp = $null
+        try {
+            $req = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($tUrl)
+            $req.Method = 'HEAD'
+            $req.Timeout = 4000
+            $req.KeepAlive = $false
+            $req.Proxy = $null
+            $resp = $req.GetResponse()
+            $dateStr = $resp.Headers['Date']
+            if ($dateStr) {
+                $serverUtc = [DateTime]::Parse($dateStr).ToUniversalTime().AddSeconds(-2)
+                return [int64]($serverUtc - [DateTime]'1970-01-01').TotalSeconds
+            }
+        } catch {
+            try {
+                if ($_.Exception.Response -and $_.Exception.Response.Headers['Date']) {
+                    $serverUtc = [DateTime]::Parse($_.Exception.Response.Headers['Date']).ToUniversalTime().AddSeconds(-2)
+                    return [int64]($serverUtc - [DateTime]'1970-01-01').TotalSeconds
+                }
+            } catch { }
+        } finally { if ($resp) { $resp.Close() } }
+    }
+    return [int64]([DateTime]::UtcNow.AddSeconds(-2) - [DateTime]'1970-01-01').TotalSeconds
 }
 function New-VisualApiDpopToken($Url, $Method) {
     Add-Type -AssemblyName System.Core -ErrorAction SilentlyContinue | Out-Null
@@ -410,7 +418,7 @@ function Get-CidFromVisualSupport($IidDigits) {
         }
         if (-not $token) {
             try {
-                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+                try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072 -bor 12288 } catch { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 }
                 $tokenResp = Invoke-RestMethod -Uri 'https://cidtoken.ntriver.org/token.json' -Method Get -TimeoutSec 10 -ErrorAction Stop
                 if ($tokenResp -and $tokenResp.token) {
                     $token = [string]$tokenResp.token
@@ -423,51 +431,57 @@ function Get-CidFromVisualSupport($IidDigits) {
             return @{ Ok = $false; Error = "Access token rong hoac khong hop le." }
         }
 
-        # 2. Sinh DPoP JWT voi khoa ephemeral ECDSA P-256
-        $dpop = New-VisualApiDpopToken '/api/productActivation/validateIID' 'POST'
-        if (-not $dpop) {
-            return @{ Ok = $false; Error = "Khong tao duoc DPoP token." }
-        }
-
-        # 3. Gui request POST toi Microsoft VisualSupport API
+        # 2. Sinh DPoP JWT va gui POST toi Microsoft VisualSupport API (co thu lai neu timeout)
         $url = 'https://visualsupport.microsoft.com/api/productActivation/validateIID'
         $numDigits = [int]($cleanIID.Length / 9)
         $body = '{"IID":"' + $cleanIID + '","ProductType":"windows","productGroup":"Windows","productName":"Windows 11","numberOfDigits":' + $numDigits + ',"Country":"USA","Region":"NOAM","InstalledDevices":1,"OverrideStatusCode":"MUL","InitialReasonCode":"45164"}'
-
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
-        $request = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($url)
-        $request.Method = 'POST'
-        $request.KeepAlive = $false
-        $request.Proxy = $null
-        $request.Timeout = 15000
-        $request.ContentType = 'application/json; charset=utf-8'
-        $request.UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-        $request.Headers.Set('Authorization', "Bearer $token")
-        $request.Headers.Set('DPoP', $dpop)
-        $request.Headers.Set('x-session-id', ('app_' + [Guid]::NewGuid().ToString('N')))
-
         $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
-        $request.ContentLength = $bodyBytes.Length
-        $reqStream = $request.GetRequestStream()
-        $reqStream.Write($bodyBytes, 0, $bodyBytes.Length)
-        $reqStream.Close()
+        try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072 -bor 12288 } catch { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 }
 
         $respText = $null
-        try {
-            $response = $request.GetResponse()
-            $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
-            $respText = $reader.ReadToEnd()
-            $reader.Close()
-            $response.Close()
-        } catch [System.Net.WebException] {
-            $webEx = $_.Exception
-            if ($webEx.Response) {
-                $reader = New-Object System.IO.StreamReader($webEx.Response.GetResponseStream())
+        $lastNetErr = $null
+        for ($vsTry = 1; $vsTry -le 2; $vsTry++) {
+            $dpop = New-VisualApiDpopToken '/api/productActivation/validateIID' 'POST'
+            if (-not $dpop) {
+                return @{ Ok = $false; Error = "Khong tao duoc DPoP token." }
+            }
+            try {
+                $request = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($url)
+                $request.Method = 'POST'
+                $request.KeepAlive = $false
+                $request.Timeout = 25000
+                $request.ReadWriteTimeout = 25000
+                $request.ContentType = 'application/json; charset=utf-8'
+                $request.UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                $request.Headers.Set('Authorization', "Bearer $token")
+                $request.Headers.Set('DPoP', $dpop)
+                $request.Headers.Set('x-session-id', ('app_' + [Guid]::NewGuid().ToString('N')))
+                $request.ContentLength = $bodyBytes.Length
+                $reqStream = $request.GetRequestStream()
+                $reqStream.Write($bodyBytes, 0, $bodyBytes.Length)
+                $reqStream.Close()
+
+                $response = $request.GetResponse()
+                $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
                 $respText = $reader.ReadToEnd()
                 $reader.Close()
-            } else {
-                return @{ Ok = $false; Error = "VisualSupport WebException: $($webEx.Message)" }
+                $response.Close()
+                break
+            } catch [System.Net.WebException] {
+                $webEx = $_.Exception
+                if ($webEx.Response) {
+                    $reader = New-Object System.IO.StreamReader($webEx.Response.GetResponseStream())
+                    $respText = $reader.ReadToEnd()
+                    $reader.Close()
+                    break
+                } else {
+                    $lastNetErr = $webEx.Message
+                    if ($vsTry -lt 2) { Start-Sleep -Seconds 1; continue }
+                }
             }
+        }
+        if (-not $respText -and $lastNetErr) {
+            return @{ Ok = $false; Error = "VisualSupport WebException: $lastNetErr" }
         }
 
         if ([string]::IsNullOrWhiteSpace($respText)) {
@@ -475,19 +489,25 @@ function Get-CidFromVisualSupport($IidDigits) {
         }
 
         # 4. Parse ket qua JSON
-        Add-Type -AssemblyName System.Web.Extensions -ErrorAction SilentlyContinue | Out-Null
         $json = $null
-        try {
-            $jsSerializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-            $json = $jsSerializer.DeserializeObject($respText)
-        } catch {
-            try { $json = ConvertFrom-Json $respText } catch { }
+        try { $json = ConvertFrom-Json $respText } catch {
+            try {
+                Add-Type -AssemblyName System.Web.Extensions -ErrorAction SilentlyContinue | Out-Null
+                $jsSerializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+                $json = $jsSerializer.DeserializeObject($respText)
+            } catch { }
         }
 
         if ($json) {
+            $dict = if ($json -is [System.Collections.IDictionary]) { [System.Collections.IDictionary]$json } else { $null }
             $cid = $null
-            if ($json -is [System.Collections.IDictionary] -and $json.Contains('cid')) { $cid = $json['cid'] }
-            elseif ($json.cid) { $cid = $json.cid }
+            if ($dict) {
+                if (($dict.Keys -contains 'cid')) { $cid = $dict['cid'] }
+                elseif (($dict.Keys -contains 'confirmationId')) { $cid = $dict['confirmationId'] }
+            } else {
+                if ($json.PSObject.Properties['cid']) { $cid = $json.cid }
+                elseif ($json.PSObject.Properties['confirmationId']) { $cid = $json.confirmationId }
+            }
 
             if ($cid) {
                 $cidDigits = ($cid -replace '\D', '')
@@ -496,8 +516,8 @@ function Get-CidFromVisualSupport($IidDigits) {
                 }
             }
 
-            $msg = if ($json -is [System.Collections.IDictionary] -and $json.Contains('message')) { $json['message'] } elseif ($json.message) { $json.message } else { $null }
-            $reason = if ($json -is [System.Collections.IDictionary] -and $json.Contains('reasonCode')) { $json['reasonCode'] } elseif ($json.reasonCode) { $json.reasonCode } else { $null }
+            $msg = if ($dict) { if (($dict.Keys -contains 'message')) { $dict['message'] } else { $null } } elseif ($json.PSObject.Properties['message']) { $json.message } else { $null }
+            $reason = if ($dict) { if (($dict.Keys -contains 'reasonCode')) { $dict['reasonCode'] } else { $null } } elseif ($json.PSObject.Properties['reasonCode']) { $json.reasonCode } else { $null }
             if ($msg -or $reason) {
                 return @{ Ok = $false; Error = "VisualSupport tra ve: $msg (reasonCode: $reason)" }
             }
@@ -1039,7 +1059,7 @@ function Get-CidFromBatchActivation2($IidDigits, $ExtendedPid) {
                 '<Digest>' + $digest + '</Digest><RequestXml>' + $requestXml + '</RequestXml>' +
                 '</request></BatchActivate></soap:Body></soap:Envelope>'
 
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+        try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072 -bor 12288 } catch { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 }
         $resp = Invoke-WebRequest -Uri 'https://activation.sls.microsoft.com/BatchActivation/BatchActivation.asmx' `
             -Method Post -ContentType 'text/xml; charset=utf-8' `
             -Headers @{
@@ -1076,22 +1096,30 @@ function ConvertTo-Base64Url2([byte[]]$Bytes) {
     return [Convert]::ToBase64String($Bytes).TrimEnd('=') -replace '\+', '-' -replace '/', '_'
 }
 function Get-NetworkUtcTime2 {
-    $resp = $null
-    try {
-        $req = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create('http://www.msftconnecttest.com/connecttest.txt')
-        $req.Method = 'HEAD'
-        $req.Timeout = 3000
-        $req.KeepAlive = $false
-        $req.Proxy = $null
-        $resp = $req.GetResponse()
-        $dateStr = $resp.Headers['Date']
-        if ($dateStr) {
-            $serverUtc = [DateTime]::Parse($dateStr).ToUniversalTime().AddSeconds(3)
-            return [int64]($serverUtc - [DateTime]'1970-01-01').TotalSeconds
-        }
-    } catch { }
-    finally { if ($resp) { $resp.Close() } }
-    return [int64]([DateTime]::UtcNow.AddSeconds(3) - [DateTime]'1970-01-01').TotalSeconds
+    foreach ($tUrl in @('https://visualsupport.microsoft.com/api/productActivation/validateIID', 'http://www.msftconnecttest.com/connecttest.txt')) {
+        $resp = $null
+        try {
+            $req = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($tUrl)
+            $req.Method = 'HEAD'
+            $req.Timeout = 4000
+            $req.KeepAlive = $false
+            $req.Proxy = $null
+            $resp = $req.GetResponse()
+            $dateStr = $resp.Headers['Date']
+            if ($dateStr) {
+                $serverUtc = [DateTime]::Parse($dateStr).ToUniversalTime().AddSeconds(-2)
+                return [int64]($serverUtc - [DateTime]'1970-01-01').TotalSeconds
+            }
+        } catch {
+            try {
+                if ($_.Exception.Response -and $_.Exception.Response.Headers['Date']) {
+                    $serverUtc = [DateTime]::Parse($_.Exception.Response.Headers['Date']).ToUniversalTime().AddSeconds(-2)
+                    return [int64]($serverUtc - [DateTime]'1970-01-01').TotalSeconds
+                }
+            } catch { }
+        } finally { if ($resp) { $resp.Close() } }
+    }
+    return [int64]([DateTime]::UtcNow.AddSeconds(-2) - [DateTime]'1970-01-01').TotalSeconds
 }
 function New-VisualApiDpopToken2($Url, $Method) {
     Add-Type -AssemblyName System.Core -ErrorAction SilentlyContinue | Out-Null
@@ -1134,7 +1162,7 @@ function Get-CidFromVisualSupport2($IidDigits) {
         }
         if (-not $token) {
             try {
-                [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
+                try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072 -bor 12288 } catch { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 }
                 $tokenResp = Invoke-RestMethod -Uri 'https://cidtoken.ntriver.org/token.json' -Method Get -TimeoutSec 10 -ErrorAction Stop
                 if ($tokenResp -and $tokenResp.token) {
                     $token = [string]$tokenResp.token
@@ -1147,51 +1175,57 @@ function Get-CidFromVisualSupport2($IidDigits) {
             return @{ Ok = $false; Error = "Access token rong hoac khong hop le." }
         }
 
-        # 2. Sinh DPoP JWT voi khoa ephemeral ECDSA P-256
-        $dpop = New-VisualApiDpopToken2 '/api/productActivation/validateIID' 'POST'
-        if (-not $dpop) {
-            return @{ Ok = $false; Error = "Khong tao duoc DPoP token." }
-        }
-
-        # 3. Gui request POST toi Microsoft VisualSupport API
+        # 2. Sinh DPoP JWT va gui POST toi Microsoft VisualSupport API (co thu lai neu timeout)
         $url = 'https://visualsupport.microsoft.com/api/productActivation/validateIID'
         $numDigits = [int]($cleanIID.Length / 9)
         $body = '{"IID":"' + $cleanIID + '","ProductType":"windows","productGroup":"Windows","productName":"Windows 11","numberOfDigits":' + $numDigits + ',"Country":"USA","Region":"NOAM","InstalledDevices":1,"OverrideStatusCode":"MUL","InitialReasonCode":"45164"}'
-
-        [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 -bor [System.Net.SecurityProtocolType]::Tls13
-        $request = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($url)
-        $request.Method = 'POST'
-        $request.KeepAlive = $false
-        $request.Proxy = $null
-        $request.Timeout = 15000
-        $request.ContentType = 'application/json; charset=utf-8'
-        $request.UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
-        $request.Headers.Set('Authorization', "Bearer $token")
-        $request.Headers.Set('DPoP', $dpop)
-        $request.Headers.Set('x-session-id', ('app_' + [Guid]::NewGuid().ToString('N')))
-
         $bodyBytes = [System.Text.Encoding]::UTF8.GetBytes($body)
-        $request.ContentLength = $bodyBytes.Length
-        $reqStream = $request.GetRequestStream()
-        $reqStream.Write($bodyBytes, 0, $bodyBytes.Length)
-        $reqStream.Close()
+        try { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.ServicePointManager]::SecurityProtocol -bor 3072 -bor 12288 } catch { [System.Net.ServicePointManager]::SecurityProtocol = [System.Net.SecurityProtocolType]::Tls12 }
 
         $respText = $null
-        try {
-            $response = $request.GetResponse()
-            $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
-            $respText = $reader.ReadToEnd()
-            $reader.Close()
-            $response.Close()
-        } catch [System.Net.WebException] {
-            $webEx = $_.Exception
-            if ($webEx.Response) {
-                $reader = New-Object System.IO.StreamReader($webEx.Response.GetResponseStream())
+        $lastNetErr = $null
+        for ($vsTry = 1; $vsTry -le 2; $vsTry++) {
+            $dpop = New-VisualApiDpopToken2 '/api/productActivation/validateIID' 'POST'
+            if (-not $dpop) {
+                return @{ Ok = $false; Error = "Khong tao duoc DPoP token." }
+            }
+            try {
+                $request = [System.Net.HttpWebRequest][System.Net.WebRequest]::Create($url)
+                $request.Method = 'POST'
+                $request.KeepAlive = $false
+                $request.Timeout = 25000
+                $request.ReadWriteTimeout = 25000
+                $request.ContentType = 'application/json; charset=utf-8'
+                $request.UserAgent = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36'
+                $request.Headers.Set('Authorization', "Bearer $token")
+                $request.Headers.Set('DPoP', $dpop)
+                $request.Headers.Set('x-session-id', ('app_' + [Guid]::NewGuid().ToString('N')))
+                $request.ContentLength = $bodyBytes.Length
+                $reqStream = $request.GetRequestStream()
+                $reqStream.Write($bodyBytes, 0, $bodyBytes.Length)
+                $reqStream.Close()
+
+                $response = $request.GetResponse()
+                $reader = New-Object System.IO.StreamReader($response.GetResponseStream())
                 $respText = $reader.ReadToEnd()
                 $reader.Close()
-            } else {
-                return @{ Ok = $false; Error = "VisualSupport WebException: $($webEx.Message)" }
+                $response.Close()
+                break
+            } catch [System.Net.WebException] {
+                $webEx = $_.Exception
+                if ($webEx.Response) {
+                    $reader = New-Object System.IO.StreamReader($webEx.Response.GetResponseStream())
+                    $respText = $reader.ReadToEnd()
+                    $reader.Close()
+                    break
+                } else {
+                    $lastNetErr = $webEx.Message
+                    if ($vsTry -lt 2) { Start-Sleep -Seconds 1; continue }
+                }
             }
+        }
+        if (-not $respText -and $lastNetErr) {
+            return @{ Ok = $false; Error = "VisualSupport WebException: $lastNetErr" }
         }
 
         if ([string]::IsNullOrWhiteSpace($respText)) {
@@ -1199,19 +1233,25 @@ function Get-CidFromVisualSupport2($IidDigits) {
         }
 
         # 4. Parse ket qua JSON
-        Add-Type -AssemblyName System.Web.Extensions -ErrorAction SilentlyContinue | Out-Null
         $json = $null
-        try {
-            $jsSerializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
-            $json = $jsSerializer.DeserializeObject($respText)
-        } catch {
-            try { $json = ConvertFrom-Json $respText } catch { }
+        try { $json = ConvertFrom-Json $respText } catch {
+            try {
+                Add-Type -AssemblyName System.Web.Extensions -ErrorAction SilentlyContinue | Out-Null
+                $jsSerializer = New-Object System.Web.Script.Serialization.JavaScriptSerializer
+                $json = $jsSerializer.DeserializeObject($respText)
+            } catch { }
         }
 
         if ($json) {
+            $dict = if ($json -is [System.Collections.IDictionary]) { [System.Collections.IDictionary]$json } else { $null }
             $cid = $null
-            if ($json -is [System.Collections.IDictionary] -and $json.Contains('cid')) { $cid = $json['cid'] }
-            elseif ($json.cid) { $cid = $json.cid }
+            if ($dict) {
+                if (($dict.Keys -contains 'cid')) { $cid = $dict['cid'] }
+                elseif (($dict.Keys -contains 'confirmationId')) { $cid = $dict['confirmationId'] }
+            } else {
+                if ($json.PSObject.Properties['cid']) { $cid = $json.cid }
+                elseif ($json.PSObject.Properties['confirmationId']) { $cid = $json.confirmationId }
+            }
 
             if ($cid) {
                 $cidDigits = ($cid -replace '\D', '')
@@ -1220,8 +1260,8 @@ function Get-CidFromVisualSupport2($IidDigits) {
                 }
             }
 
-            $msg = if ($json -is [System.Collections.IDictionary] -and $json.Contains('message')) { $json['message'] } elseif ($json.message) { $json.message } else { $null }
-            $reason = if ($json -is [System.Collections.IDictionary] -and $json.Contains('reasonCode')) { $json['reasonCode'] } elseif ($json.reasonCode) { $json.reasonCode } else { $null }
+            $msg = if ($dict) { if (($dict.Keys -contains 'message')) { $dict['message'] } else { $null } } elseif ($json.PSObject.Properties['message']) { $json.message } else { $null }
+            $reason = if ($dict) { if (($dict.Keys -contains 'reasonCode')) { $dict['reasonCode'] } else { $null } } elseif ($json.PSObject.Properties['reasonCode']) { $json.reasonCode } else { $null }
             if ($msg -or $reason) {
                 return @{ Ok = $false; Error = "VisualSupport tra ve: $msg (reasonCode: $reason)" }
             }
