@@ -508,57 +508,278 @@ function Get-CidFromVisualSupport($IidDigits) {
         return @{ Ok = $false; Error = $_.Exception.Message }
     }
 }
-function Invoke-ConvertToDigitalLicense($ProductKey) {
-    if ([string]::IsNullOrWhiteSpace($ProductKey)) { return }
-    Write-Host 'Dang tu dong nhap de key qua Modern Activation de chuyen doi sang Ban quyen ky thuat so (Digital License)...'
-    $dNotice = Start-ActivatingNotice 'Dang chuyen doi sang Ban quyen ky thuat so (Digital License), vui long doi...'
-    try { Start-Service ClipSVC -ErrorAction SilentlyContinue } catch { }
-    try { Start-Service LicenseManager -ErrorAction SilentlyContinue } catch { }
-    try { Start-Service sppsvc -ErrorAction SilentlyContinue } catch { }
-    $cpkProc = $null
-    try {
-        $pInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $pInfo.FileName = Join-Path $env:SystemRoot 'System32\changepk.exe'
-        $pInfo.Arguments = "/ProductKey $ProductKey /NoUI /NoReboot"
-        $pInfo.UseShellExecute = $false
-        $pInfo.CreateNoWindow = $true
-        $cpkProc = [System.Diagnostics.Process]::Start($pInfo)
-    } catch {
-        $cpkProc = Start-Process changepk.exe -ArgumentList "/ProductKey $ProductKey /NoUI /NoReboot" -PassThru -ErrorAction SilentlyContinue
+$ModernLicCs = @'
+using System;
+using System.Runtime.InteropServices;
+using System.Threading;
+
+public static class ActWinModernLic {
+    [DllImport("combase.dll")]
+    static extern int RoInitialize(int initType);
+    [DllImport("combase.dll")]
+    static extern int WindowsCreateString([MarshalAs(UnmanagedType.LPWStr)] string sourceString, int length, out IntPtr hstring);
+    [DllImport("combase.dll")]
+    static extern int WindowsDeleteString(IntPtr hstring);
+    [DllImport("combase.dll")]
+    static extern IntPtr WindowsGetStringRawBuffer(IntPtr hstring, out uint length);
+    [DllImport("combase.dll")]
+    static extern int RoGetActivationFactory(IntPtr activatableClassId, ref Guid iid, out IntPtr factory);
+
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    delegate int StrAsyncDel(IntPtr thisPtr, IntPtr keyHstr, out IntPtr asyncOp);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    delegate int ActionAsyncDel(IntPtr thisPtr, out IntPtr asyncAction);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    delegate int GetStatusDel(IntPtr asyncInfo, out int status);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    delegate int GetIntPropDel(IntPtr obj, out int val);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    delegate int GetBytePropDel(IntPtr obj, out byte val);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    delegate int GetPtrDel(IntPtr obj, out IntPtr val);
+    [UnmanagedFunctionPointer(CallingConvention.StdCall)]
+    delegate int ActionGetResultsDel(IntPtr asyncAction);
+
+    static int WaitAsync(IntPtr asyncPtr, int timeoutMs, out int asyncErr) {
+        asyncErr = 0;
+        if (asyncPtr == IntPtr.Zero) return unchecked((int)0x80004003);
+        Guid iidAsyncInfo = new Guid("00000036-0000-0000-C000-000000000046");
+        IntPtr asyncInfo = IntPtr.Zero;
+        int hr = Marshal.QueryInterface(asyncPtr, ref iidAsyncInfo, out asyncInfo);
+        if (hr != 0 || asyncInfo == IntPtr.Zero) return hr != 0 ? hr : unchecked((int)0x80004002);
+        try {
+            IntPtr aiVtbl = Marshal.ReadIntPtr(asyncInfo);
+            var getStatus = (GetStatusDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(aiVtbl, 0x38), typeof(GetStatusDel));
+            var getErr = (GetIntPropDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(aiVtbl, 0x40), typeof(GetIntPropDel));
+            int status = 0;
+            int waited = 0;
+            while (waited < timeoutMs) {
+                hr = getStatus(asyncInfo, out status);
+                if (hr < 0) return hr;
+                if (status != 0) break;
+                Thread.Sleep(50);
+                waited += 50;
+            }
+            if (status == 0) return unchecked((int)0x800705B4);
+            if (status != 1) {
+                getErr(asyncInfo, out asyncErr);
+                return asyncErr != 0 ? asyncErr : unchecked((int)0x80004005);
+            }
+            return 0;
+        } finally {
+            Marshal.Release(asyncInfo);
+        }
     }
-    $wsh = $null
-    try { $wsh = New-Object -ComObject WScript.Shell } catch { }
-    $deadline = (Get-Date).AddSeconds(25)
-    while ((Get-Date) -lt $deadline) {
-        if ($cpkProc -and $cpkProc.HasExited) { break }
-        if ($wsh) {
-            $procs = Get-Process -Name 'changepk' -ErrorAction SilentlyContinue
-            foreach ($p in $procs) {
-                if ($p.MainWindowHandle -ne [IntPtr]::Zero) {
-                    try {
-                        $wsh.AppActivate($p.Id) | Out-Null
-                        Start-Sleep -Milliseconds 400
-                        $wsh.SendKeys('{ENTER}')
-                    } catch { }
+
+    public static string EvaluateOnly(string key) {
+        if (string.IsNullOrEmpty(key)) return "ERR:EmptyKey";
+        RoInitialize(1);
+        Guid iid = new Guid("65d46056-2e54-4b8f-88a5-ac12065e1fb2");
+        string clsName = "Windows.System.Licensing.LicensingPolicyManager";
+        IntPtr hCls = IntPtr.Zero, factory = IntPtr.Zero, hKey = IntPtr.Zero, evalOp = IntPtr.Zero, props = IntPtr.Zero;
+        try {
+            int hr = WindowsCreateString(clsName, clsName.Length, out hCls);
+            if (hr < 0) return string.Format("ERR:WinStr:0x{0:X8}", hr);
+            hr = RoGetActivationFactory(hCls, ref iid, out factory);
+            if (hr < 0 || factory == IntPtr.Zero) return string.Format("ERR:Factory:0x{0:X8}", hr);
+            hr = WindowsCreateString(key, key.Length, out hKey);
+            if (hr < 0) return string.Format("ERR:KeyStr:0x{0:X8}", hr);
+
+            IntPtr vtbl = Marshal.ReadIntPtr(factory);
+            var evalFn = (StrAsyncDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vtbl, 0x30), typeof(StrAsyncDel));
+            hr = evalFn(factory, hKey, out evalOp);
+            if (hr < 0 || evalOp == IntPtr.Zero) return string.Format("ERR:EvalCall:0x{0:X8}", hr);
+
+            int aErr;
+            hr = WaitAsync(evalOp, 30000, out aErr);
+            if (hr < 0) return string.Format("ERR:EvalWait:0x{0:X8}", hr);
+
+            IntPtr opVtbl = Marshal.ReadIntPtr(evalOp);
+            var getRes = (GetPtrDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(opVtbl, 0x40), typeof(GetPtrDel));
+            hr = getRes(evalOp, out props);
+            if (hr < 0 || props == IntPtr.Zero) return string.Format("ERR:EvalRes:0x{0:X8}", hr);
+
+            IntPtr pVtbl = Marshal.ReadIntPtr(props);
+            var getAct = (GetIntPropDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(pVtbl, 0x30), typeof(GetIntPropDel));
+            var getRed = (GetBytePropDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(pVtbl, 0x40), typeof(GetBytePropDel));
+            var getErr = (GetIntPropDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(pVtbl, 0x70), typeof(GetIntPropDel));
+            int action = 0, errCode = 0;
+            byte isRed = 0;
+            getAct(props, out action);
+            getRed(props, out isRed);
+            getErr(props, out errCode);
+            return string.Format("OK:action={0};redeemable={1};err=0x{2:X8}", action, isRed, errCode);
+        } finally {
+            if (props != IntPtr.Zero) Marshal.Release(props);
+            if (evalOp != IntPtr.Zero) Marshal.Release(evalOp);
+            if (hKey != IntPtr.Zero) WindowsDeleteString(hKey);
+            if (factory != IntPtr.Zero) Marshal.Release(factory);
+            if (hCls != IntPtr.Zero) WindowsDeleteString(hCls);
+        }
+    }
+
+    public static string ConvertToDigitalLicense(string key) {
+        if (string.IsNullOrEmpty(key)) return "ERR:EmptyKey";
+        RoInitialize(1);
+        Guid iid = new Guid("65d46056-2e54-4b8f-88a5-ac12065e1fb2");
+        string clsName = "Windows.System.Licensing.LicensingPolicyManager";
+        IntPtr hCls = IntPtr.Zero, factory = IntPtr.Zero, hKey = IntPtr.Zero;
+        IntPtr evalOp = IntPtr.Zero, props = IntPtr.Zero;
+        IntPtr redeemOp = IntPtr.Zero, redeemProps = IntPtr.Zero, hWorkKey = IntPtr.Zero;
+        IntPtr applyOp = IntPtr.Zero, actOp = IntPtr.Zero;
+        try {
+            int hr = WindowsCreateString(clsName, clsName.Length, out hCls);
+            if (hr < 0) return string.Format("ERR:WinStr:0x{0:X8}", hr);
+            hr = RoGetActivationFactory(hCls, ref iid, out factory);
+            if (hr < 0 || factory == IntPtr.Zero) return string.Format("ERR:Factory:0x{0:X8}", hr);
+            hr = WindowsCreateString(key, key.Length, out hKey);
+            if (hr < 0) return string.Format("ERR:KeyStr:0x{0:X8}", hr);
+
+            IntPtr vtbl = Marshal.ReadIntPtr(factory);
+            var evalFn = (StrAsyncDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vtbl, 0x30), typeof(StrAsyncDel));
+            hr = evalFn(factory, hKey, out evalOp);
+            if (hr < 0 || evalOp == IntPtr.Zero) return string.Format("ERR:EvalCall:0x{0:X8}", hr);
+            int aErr;
+            hr = WaitAsync(evalOp, 30000, out aErr);
+            if (hr < 0) return string.Format("ERR:EvalWait:0x{0:X8}", hr);
+            var evalResFn = (GetPtrDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(Marshal.ReadIntPtr(evalOp), 0x40), typeof(GetPtrDel));
+            hr = evalResFn(evalOp, out props);
+            if (hr < 0 || props == IntPtr.Zero) return string.Format("ERR:EvalRes:0x{0:X8}", hr);
+
+            IntPtr pVtbl = Marshal.ReadIntPtr(props);
+            var getAct = (GetIntPropDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(pVtbl, 0x30), typeof(GetIntPropDel));
+            var getRed = (GetBytePropDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(pVtbl, 0x40), typeof(GetBytePropDel));
+            var getErr = (GetIntPropDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(pVtbl, 0x70), typeof(GetIntPropDel));
+            int action = 0, evalErr = 0;
+            byte isRedeemable = 0;
+            getAct(props, out action);
+            getRed(props, out isRedeemable);
+            getErr(props, out evalErr);
+            if (evalErr < 0) return string.Format("ERR:EvalProp:0x{0:X8}", evalErr);
+
+            string workKey = key;
+            int redeemHr = 0;
+            if (isRedeemable != 0) {
+                var redeemFn = (StrAsyncDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vtbl, 0x40), typeof(StrAsyncDel));
+                hr = redeemFn(factory, hKey, out redeemOp);
+                if (hr >= 0 && redeemOp != IntPtr.Zero) {
+                    hr = WaitAsync(redeemOp, 45000, out aErr);
+                    if (hr >= 0) {
+                        var redResFn = (GetPtrDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(Marshal.ReadIntPtr(redeemOp), 0x40), typeof(GetPtrDel));
+                        if (redResFn(redeemOp, out redeemProps) >= 0 && redeemProps != IntPtr.Zero) {
+                            IntPtr rpVtbl = Marshal.ReadIntPtr(redeemProps);
+                            var getNewKey = (GetPtrDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(rpVtbl, 0x30), typeof(GetPtrDel));
+                            var getRedErr = (GetIntPropDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(rpVtbl, 0x40), typeof(GetIntPropDel));
+                            IntPtr hNew = IntPtr.Zero;
+                            if (getNewKey(redeemProps, out hNew) >= 0 && hNew != IntPtr.Zero) {
+                                uint len;
+                                IntPtr buf = WindowsGetStringRawBuffer(hNew, out len);
+                                if (buf != IntPtr.Zero && len > 0) workKey = Marshal.PtrToStringUni(buf, (int)len);
+                                WindowsDeleteString(hNew);
+                            }
+                            getRedErr(redeemProps, out redeemHr);
+                        }
+                    } else {
+                        redeemHr = hr;
+                    }
+                } else {
+                    redeemHr = hr;
                 }
             }
-        }
-        Start-Sleep -Seconds 1
-    }
-    if ($wsh) {
-        $procs = Get-Process -Name 'changepk' -ErrorAction SilentlyContinue
-        foreach ($p in $procs) {
-            if ($p.MainWindowHandle -ne [IntPtr]::Zero) {
-                try {
-                    $wsh.AppActivate($p.Id) | Out-Null
-                    Start-Sleep -Milliseconds 400
-                    $wsh.SendKeys('{ENTER}')
-                } catch { }
+
+            if (action == 1) {
+                WindowsCreateString(workKey, workKey.Length, out hWorkKey);
+                var applyFn = (StrAsyncDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vtbl, 0x38), typeof(StrAsyncDel));
+                hr = applyFn(factory, hWorkKey, out applyOp);
+                if (hr < 0 || applyOp == IntPtr.Zero) return string.Format("ERR:ApplyCall:0x{0:X8}", hr);
+                hr = WaitAsync(applyOp, 60000, out aErr);
+                if (hr < 0) return string.Format("ERR:ApplyWait:0x{0:X8}", hr);
+                var applyResFn = (ActionGetResultsDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(Marshal.ReadIntPtr(applyOp), 0x40), typeof(ActionGetResultsDel));
+                hr = applyResFn(applyOp);
+                if (hr < 0) return string.Format("ERR:ApplyRes:0x{0:X8}", hr);
             }
+
+            var actFn = (ActionAsyncDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(vtbl, 0x48), typeof(ActionAsyncDel));
+            hr = actFn(factory, out actOp);
+            if (hr < 0 || actOp == IntPtr.Zero) return string.Format("ERR:ActCall:0x{0:X8}", hr);
+            hr = WaitAsync(actOp, 45000, out aErr);
+            if (hr < 0) {
+                if (redeemHr < 0) return string.Format("ERR:Redeem=0x{0:X8};ActWait=0x{1:X8}", redeemHr, hr);
+                return string.Format("ERR:ActWait:0x{0:X8}", hr);
+            }
+            var actResFn = (ActionGetResultsDel)Marshal.GetDelegateForFunctionPointer(Marshal.ReadIntPtr(Marshal.ReadIntPtr(actOp), 0x40), typeof(ActionGetResultsDel));
+            hr = actResFn(actOp);
+            if (hr < 0) {
+                if (redeemHr < 0) return string.Format("ERR:Redeem=0x{0:X8};ActRes=0x{1:X8}", redeemHr, hr);
+                return string.Format("ERR:ActRes:0x{0:X8}", hr);
+            }
+            return string.Format("OK:action={0};redeemable={1};redeemHr=0x{2:X8}", action, isRedeemable, redeemHr);
+        } finally {
+            if (actOp != IntPtr.Zero) Marshal.Release(actOp);
+            if (applyOp != IntPtr.Zero) Marshal.Release(applyOp);
+            if (hWorkKey != IntPtr.Zero) WindowsDeleteString(hWorkKey);
+            if (redeemProps != IntPtr.Zero) Marshal.Release(redeemProps);
+            if (redeemOp != IntPtr.Zero) Marshal.Release(redeemOp);
+            if (props != IntPtr.Zero) Marshal.Release(props);
+            if (evalOp != IntPtr.Zero) Marshal.Release(evalOp);
+            if (hKey != IntPtr.Zero) WindowsDeleteString(hKey);
+            if (factory != IntPtr.Zero) Marshal.Release(factory);
+            if (hCls != IntPtr.Zero) WindowsDeleteString(hCls);
         }
     }
-    Stop-ActivatingNotice $dNotice
-    Write-Host 'Da hoan tat nhap de key qua Modern Activation de ghi nhan Digital License.'
+}
+'@
+function Invoke-ConvertToDigitalLicense($ProductKey) {
+    if ([string]::IsNullOrWhiteSpace($ProductKey)) { return @{ Ok = $false; Detail = 'EmptyKey' } }
+    Write-Host 'Dang tu dong nhap de key qua Modern Activation (LicensingPolicyManager) de chuyen doi sang Ban quyen ky thuat so (Digital License)...'
+    $dNotice = Start-ActivatingNotice 'Dang chuyen doi sang Ban quyen ky thuat so (Digital License), vui long doi...'
+    try {
+        try { Start-Service ClipSVC -ErrorAction SilentlyContinue } catch { }
+        try { Start-Service LicenseManager -ErrorAction SilentlyContinue } catch { }
+        try { Start-Service sppsvc -ErrorAction SilentlyContinue } catch { }
+
+        $winRtRes = $null
+        try {
+            if (-not ('ActWinModernLic' -as [type])) {
+                Add-Type -TypeDefinition $ModernLicCs -ErrorAction Stop
+            }
+            $winRtRes = [ActWinModernLic]::ConvertToDigitalLicense($ProductKey)
+            Write-Host "Modern Activation (LicensingPolicyManager): $winRtRes"
+            if ($winRtRes -and $winRtRes.StartsWith('OK:')) {
+                return @{ Ok = $true; Detail = $winRtRes }
+            }
+        } catch {
+            $winRtRes = "ERR:WinRT:$($_.Exception.Message)"
+            Write-Host "Modern Activation WinRT khong kha dung, chuyen sang du phong changepk.exe: $winRtRes"
+        }
+
+        try {
+            $pInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $pInfo.FileName = Join-Path $env:SystemRoot 'System32\changepk.exe'
+            $pInfo.Arguments = "/ProductKey $ProductKey /NoUI /NoReboot"
+            $pInfo.UseShellExecute = $false
+            $pInfo.CreateNoWindow = $true
+            $cpkProc = [System.Diagnostics.Process]::Start($pInfo)
+            if ($cpkProc) {
+                if (-not $cpkProc.WaitForExit(30000)) {
+                    try { $cpkProc.Kill() } catch { }
+                    return @{ Ok = $false; Detail = "$winRtRes; changepk.exe timeout" }
+                }
+                if ($cpkProc.ExitCode -eq 0) {
+                    Write-Host 'changepk.exe /NoUI hoan tat (ExitCode=0).'
+                    return @{ Ok = $true; Detail = 'changepk.exe ExitCode=0' }
+                }
+                $hexCode = '0x{0:X8}' -f ($cpkProc.ExitCode -band 0xFFFFFFFFL)
+                Write-Host "changepk.exe /NoUI tra ve ma loi: $hexCode"
+                return @{ Ok = $false; Detail = "$winRtRes; changepk.exe=$hexCode" }
+            }
+        } catch {
+            return @{ Ok = $false; Detail = "$winRtRes; changepk.exe=$($_.Exception.Message)" }
+        }
+        return @{ Ok = $false; Detail = "$winRtRes" }
+    } finally {
+        Stop-ActivatingNotice $dNotice
+    }
 }
 function Invoke-PhoneActivation($Last5, $ErrorOutput, $FullKey = $null) {
     if (-not $FullKey -and $script:key) { $FullKey = $script:key }
@@ -627,8 +848,12 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput, $FullKey = $null) {
         if ($phoneOk) {
             $cidGroups = @()
             for ($ci = 0; $ci -lt $autoCid.Length; $ci += 6) { $cidGroups += $autoCid.Substring($ci, [Math]::Min(6, $autoCid.Length - $ci)) }
-            Invoke-ConvertToDigitalLicense $FullKey
-            Show-Info "Da tu dong lay CID ($($cidSource)) va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $Last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+            $conv = Invoke-ConvertToDigitalLicense $FullKey
+            if ($conv.Ok) {
+                Show-Info "Da tu dong lay CID ($($cidSource)) va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $Last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+            } else {
+                Show-Info "Da tu dong lay CID ($($cidSource)) va kich hoat thanh cong Windows Pro (5 ky tu cuoi: $Last5).`r`nTuy nhien buoc tu dong chuyen sang Digital License chua thanh cong ($($conv.Detail)).`r`nNeu Settings chua bao Digital license, hay vao Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Da kich hoat (Canh bao Digital License)'
+            }
             return $true
         } else {
             Write-Host "Kich hoat bang CID tu dong chua thanh cong: $atpOut"
@@ -669,8 +894,12 @@ function Invoke-PhoneActivation($Last5, $ErrorOutput, $FullKey = $null) {
         }
         Stop-ActivatingNotice $phoneNotice
         if ($phoneOk) {
-            Invoke-ConvertToDigitalLicense $FullKey
-            Show-Info "Da kich hoat bang Confirmation ID va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $Last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+            $conv = Invoke-ConvertToDigitalLicense $FullKey
+            if ($conv.Ok) {
+                Show-Info "Da kich hoat bang Confirmation ID va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $Last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+            } else {
+                Show-Info "Da kich hoat bang Confirmation ID thanh cong (5 ky tu cuoi: $Last5).`r`nTuy nhien buoc tu dong chuyen sang Digital License chua thanh cong ($($conv.Detail)).`r`nNeu Settings chua bao Digital license, hay vao Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Da kich hoat (Canh bao Digital License)'
+            }
             return $true
         }
         $atpText = $atpOut
@@ -1004,56 +1233,57 @@ function Get-CidFromVisualSupport2($IidDigits) {
     }
 }
 function Invoke-ConvertToDigitalLicense2($ProductKey) {
-    if ([string]::IsNullOrWhiteSpace($ProductKey)) { return }
-    Write-Host 'Dang tu dong nhap de key qua Modern Activation de chuyen doi sang Ban quyen ky thuat so (Digital License)...'
+    if ([string]::IsNullOrWhiteSpace($ProductKey)) { return @{ Ok = $false; Detail = 'EmptyKey' } }
+    Write-Host 'Dang tu dong nhap de key qua Modern Activation (LicensingPolicyManager) de chuyen doi sang Ban quyen ky thuat so (Digital License)...'
     $dNotice2 = Start-Notice2 'Dang chuyen doi sang Ban quyen ky thuat so (Digital License), vui long doi...'
-    try { Start-Service ClipSVC -ErrorAction SilentlyContinue } catch { }
-    try { Start-Service LicenseManager -ErrorAction SilentlyContinue } catch { }
-    try { Start-Service sppsvc -ErrorAction SilentlyContinue } catch { }
-    $cpkProc2 = $null
     try {
-        $pInfo = New-Object System.Diagnostics.ProcessStartInfo
-        $pInfo.FileName = Join-Path $env:SystemRoot 'System32\changepk.exe'
-        $pInfo.Arguments = "/ProductKey $ProductKey /NoUI /NoReboot"
-        $pInfo.UseShellExecute = $false
-        $pInfo.CreateNoWindow = $true
-        $cpkProc2 = [System.Diagnostics.Process]::Start($pInfo)
-    } catch {
-        $cpkProc2 = Start-Process changepk.exe -ArgumentList "/ProductKey $ProductKey /NoUI /NoReboot" -PassThru -ErrorAction SilentlyContinue
-    }
-    $wsh2 = $null
-    try { $wsh2 = New-Object -ComObject WScript.Shell } catch { }
-    $deadline = (Get-Date).AddSeconds(25)
-    while ((Get-Date) -lt $deadline) {
-        if ($cpkProc2 -and $cpkProc2.HasExited) { break }
-        if ($wsh2) {
-            $procs = Get-Process -Name 'changepk' -ErrorAction SilentlyContinue
-            foreach ($p in $procs) {
-                if ($p.MainWindowHandle -ne [IntPtr]::Zero) {
-                    try {
-                        $wsh2.AppActivate($p.Id) | Out-Null
-                        Start-Sleep -Milliseconds 400
-                        $wsh2.SendKeys('{ENTER}')
-                    } catch { }
+        try { Start-Service ClipSVC -ErrorAction SilentlyContinue } catch { }
+        try { Start-Service LicenseManager -ErrorAction SilentlyContinue } catch { }
+        try { Start-Service sppsvc -ErrorAction SilentlyContinue } catch { }
+
+        $winRtRes = $null
+        try {
+            if (-not ('ActWinModernLic' -as [type])) {
+                $modernLicCs2 = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__MODERNLIC_B64__'))
+                Add-Type -TypeDefinition $modernLicCs2 -ErrorAction Stop
+            }
+            $winRtRes = [ActWinModernLic]::ConvertToDigitalLicense($ProductKey)
+            Write-Host "Modern Activation (LicensingPolicyManager): $winRtRes"
+            if ($winRtRes -and $winRtRes.StartsWith('OK:')) {
+                return @{ Ok = $true; Detail = $winRtRes }
+            }
+        } catch {
+            $winRtRes = "ERR:WinRT:$($_.Exception.Message)"
+            Write-Host "Modern Activation WinRT khong kha dung, chuyen sang du phong changepk.exe: $winRtRes"
+        }
+
+        try {
+            $pInfo = New-Object System.Diagnostics.ProcessStartInfo
+            $pInfo.FileName = Join-Path $env:SystemRoot 'System32\changepk.exe'
+            $pInfo.Arguments = "/ProductKey $ProductKey /NoUI /NoReboot"
+            $pInfo.UseShellExecute = $false
+            $pInfo.CreateNoWindow = $true
+            $cpkProc2 = [System.Diagnostics.Process]::Start($pInfo)
+            if ($cpkProc2) {
+                if (-not $cpkProc2.WaitForExit(30000)) {
+                    try { $cpkProc2.Kill() } catch { }
+                    return @{ Ok = $false; Detail = "$winRtRes; changepk.exe timeout" }
                 }
+                if ($cpkProc2.ExitCode -eq 0) {
+                    Write-Host 'changepk.exe /NoUI hoan tat (ExitCode=0).'
+                    return @{ Ok = $true; Detail = 'changepk.exe ExitCode=0' }
+                }
+                $hexCode = '0x{0:X8}' -f ($cpkProc2.ExitCode -band 0xFFFFFFFFL)
+                Write-Host "changepk.exe /NoUI tra ve ma loi: $hexCode"
+                return @{ Ok = $false; Detail = "$winRtRes; changepk.exe=$hexCode" }
             }
+        } catch {
+            return @{ Ok = $false; Detail = "$winRtRes; changepk.exe=$($_.Exception.Message)" }
         }
-        Start-Sleep -Seconds 1
+        return @{ Ok = $false; Detail = "$winRtRes" }
+    } finally {
+        Stop-Notice2 $dNotice2
     }
-    if ($wsh2) {
-        $procs = Get-Process -Name 'changepk' -ErrorAction SilentlyContinue
-        foreach ($p in $procs) {
-            if ($p.MainWindowHandle -ne [IntPtr]::Zero) {
-                try {
-                    $wsh2.AppActivate($p.Id) | Out-Null
-                    Start-Sleep -Milliseconds 400
-                    $wsh2.SendKeys('{ENTER}')
-                } catch { }
-            }
-        }
-    }
-    Stop-Notice2 $dNotice2
-    Write-Host 'Da hoan tat nhap de key qua Modern Activation de ghi nhan Digital License.'
 }
 try {
     if (-not (Test-Path $KeyFile)) { throw 'Khong tim thay file key da ma hoa. Hay chay lai acti-win.ps1 va nhap key.' }
@@ -1087,8 +1317,12 @@ try {
     }
     Stop-Notice2 $noticeProc2
     if ($ok) {
-        Invoke-ConvertToDigitalLicense2 $key
-        Show-Info2 "Da kich hoat va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+        $conv2 = Invoke-ConvertToDigitalLicense2 $key
+        if ($conv2.Ok) {
+            Show-Info2 "Da kich hoat va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+        } else {
+            Show-Info2 "Da kich hoat Windows Pro thanh cong (5 ky tu cuoi: $last5).`r`nTuy nhien buoc tu dong chuyen sang Digital License chua thanh cong ($($conv2.Detail)).`r`nNeu Settings chua bao Digital license, hay vao Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Da kich hoat (Canh bao Digital License)'
+        }
     } else {
         $errText = "$o1`n$o2"
         if ($errText.Length -gt 1500) { $errText = $errText.Substring(0, 1500) }
@@ -1153,8 +1387,12 @@ try {
                 if ($ok) {
                     $cidGroups = @()
                     for ($ci = 0; $ci -lt $autoCid2.Length; $ci += 6) { $cidGroups += $autoCid2.Substring($ci, [Math]::Min(6, $autoCid2.Length - $ci)) }
-                    Invoke-ConvertToDigitalLicense2 $key
-                    Show-Info2 "Da tu dong lay CID ($($cidSource2)) va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+                    $conv2 = Invoke-ConvertToDigitalLicense2 $key
+                    if ($conv2.Ok) {
+                        Show-Info2 "Da tu dong lay CID ($($cidSource2)) va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+                    } else {
+                        Show-Info2 "Da tu dong lay CID ($($cidSource2)) va kich hoat thanh cong Windows Pro (5 ky tu cuoi: $last5).`r`nTuy nhien buoc tu dong chuyen sang Digital License chua thanh cong ($($conv2.Detail)).`r`nNeu Settings chua bao Digital license, hay vao Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Da kich hoat (Canh bao Digital License)'
+                    }
                 } else {
                     Write-Host "Kich hoat bang CID tu dong chua thanh cong: $atpOut2"
                 }
@@ -1194,8 +1432,12 @@ try {
                         }
                         Stop-Notice2 $noticePhone
                         if ($ok) {
-                            Invoke-ConvertToDigitalLicense2 $key
-                            Show-Info2 "Da kich hoat bang Confirmation ID va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+                            $conv2 = Invoke-ConvertToDigitalLicense2 $key
+                            if ($conv2.Ok) {
+                                Show-Info2 "Da kich hoat bang Confirmation ID va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nCID: $($cidGroups -join ' ')`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+                            } else {
+                                Show-Info2 "Da kich hoat bang Confirmation ID thanh cong (5 ky tu cuoi: $last5).`r`nTuy nhien buoc tu dong chuyen sang Digital License chua thanh cong ($($conv2.Detail)).`r`nNeu Settings chua bao Digital license, hay vao Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Da kich hoat (Canh bao Digital License)'
+                            }
                         } else {
                             $atpText = $atpOut
                             if ($atpText.Length -gt 1200) { $atpText = $atpText.Substring(0, 1200) }
@@ -1319,10 +1561,24 @@ if (-not $key) { Write-Host 'Da huy: khong co key.'; exit }
 $last5 = $key.Substring($key.Length - 5)
 
 if ($isPro) {
+    if (Test-Activated $last5) {
+        Write-Host "May da kich hoat san voi key co 5 ky tu cuoi $last5. Chuyen thang sang buoc ghi nhan Digital License..."
+        $conv = Invoke-ConvertToDigitalLicense $key
+        if ($conv.Ok) {
+            Show-Info "May da kich hoat san voi key $last5 va da chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+        } else {
+            Show-Info "May da kich hoat san voi key $last5, nhung buoc tu dong chuyen sang Digital License chua thanh cong ($($conv.Detail)).`r`nHay mo Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Canh bao Digital License'
+        }
+        exit
+    }
     $result = Invoke-ActivateAndCheck $key $last5
     if ($result.Ok) {
-        Invoke-ConvertToDigitalLicense $key
-        Show-Info "Da kich hoat va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+        $conv = Invoke-ConvertToDigitalLicense $key
+        if ($conv.Ok) {
+            Show-Info "Da kich hoat va chuyen doi thanh cong sang Ban quyen ky thuat so (Digital License)!`r`n5 ky tu cuoi: $last5`r`nKhi cai lai Win tren may nay se tu dong nhan ban quyen!" 'ActWin - Digital License Thanh cong'
+        } else {
+            Show-Info "Da kich hoat Windows Pro thanh cong (5 ky tu cuoi: $last5).`r`nTuy nhien buoc tu dong chuyen sang Digital License chua thanh cong ($($conv.Detail)).`r`nNeu Settings chua bao Digital license, hay vao Settings > System > Activation > Change product key de nhap de key nay." 'ActWin - Da kich hoat (Canh bao Digital License)'
+        }
     } else {
         # Already-Pro machine: same phone flow as phase 2, instead of
         # stopping at the online error.
@@ -1337,7 +1593,8 @@ $secureKey = ConvertTo-SecureString $key -AsPlainText -Force
 $encKey = $secureKey | ConvertFrom-SecureString
 Set-Content $KeyFile $encKey -Force -NoNewline -Encoding Ascii
 
-$phase2 = $Phase2Template.Replace('__TASK__', $TaskName).Replace('__KEYFILE__', $KeyFile).Replace('__PHASE2FILE__', $Phase2File).Replace('__WORKDIR__', $WorkDir)
+$modernLicB64 = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($ModernLicCs))
+$phase2 = $Phase2Template.Replace('__TASK__', $TaskName).Replace('__KEYFILE__', $KeyFile).Replace('__PHASE2FILE__', $Phase2File).Replace('__WORKDIR__', $WorkDir).Replace('__MODERNLIC_B64__', $modernLicB64)
 Set-Content $Phase2File $phase2 -Force -Encoding UTF8
 
 $currentUser = [Security.Principal.WindowsIdentity]::GetCurrent().Name
